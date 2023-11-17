@@ -1,11 +1,26 @@
 use crate::expr::{Expr, LiteralValue};
 use crate::scanner::{Token, TokenType};
 use crate::stmt::Stmt;
-use std::borrow::Cow;
-
+use std::fmt::Display;
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+}
+
+enum FunctionKind {
+    Function,
+    Method,
+    Initializer,
+}
+
+impl Display for FunctionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FunctionKind::Function => write!(f, "function"),
+            FunctionKind::Method => write!(f, "method"),
+            FunctionKind::Initializer => write!(f, "initializer"),
+        }
+    }
 }
 
 impl Parser {
@@ -50,9 +65,54 @@ impl Parser {
                     Err(e)
                 }
             }
+        } else if self.match_token(vec![TokenType::Fun]) {
+            self.function(FunctionKind::Function)
         } else {
             self.statement()
         }
+    }
+
+    fn function(&mut self, kind: FunctionKind) -> Result<Stmt, std::io::Error> {
+        let name = self.consume(TokenType::Identifier, &format!("Expect {} name.", kind))?;
+        self.consume(
+            TokenType::LeftParen,
+            &format!("Expect '(' after {} name.", kind),
+        )?;
+        let mut params = Vec::new();
+
+        if !self.check(TokenType::RightParen) {
+            loop {
+                if params.len() >= 255 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Can't have more than 255 parameters.",
+                    ));
+                }
+
+                params.push(self.consume(TokenType::Identifier, "Expect parameter name.")?);
+
+                if !self.match_token(vec![TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType::RightParen, "Expect ')' after parameters.")?;
+        self.consume(
+            TokenType::LeftBrace,
+            &format!("Expect '{{' before {} body.", kind),
+        )?;
+        let body = match self.block_statement() {
+            Ok(Stmt::Block { statements }) => statements,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Expect function body.",
+                ))
+            }
+        };
+
+        Ok(Stmt::Function { name, params, body })
     }
 
     fn var_declaration(&mut self) -> Result<Stmt, std::io::Error> {
@@ -69,15 +129,122 @@ impl Parser {
             "Expect ';' after variable declaration.",
         )?;
 
-        Ok(Stmt::Var { name: name.clone(), initializer: initializer })
+        Ok(Stmt::Var {
+            name: name.clone(),
+            initializer: initializer,
+        })
     }
 
     fn statement(&mut self) -> Result<Stmt, std::io::Error> {
         if self.match_token(vec![TokenType::Print]) {
-            return self.print_statement();
+            self.print_statement()
+        } else if self.match_token(vec![TokenType::LeftBrace]) {
+            self.block_statement()
+        } else if self.match_token(vec![TokenType::While]) {
+            self.while_statement()
+        } else if self.match_token(vec![TokenType::For]) {
+            self.for_statement()
+        } else if self.match_token(vec![TokenType::If]) {
+            self.if_statement()
+        } else {
+            self.expression_statement()
+        }
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt, std::io::Error> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'for'.")?;
+
+        let initializer = if self.match_token(vec![TokenType::Semicolon]) {
+            None
+        } else if self.match_token(vec![TokenType::Var]) {
+            Some(self.var_declaration()?)
+        } else {
+            Some(self.expression_statement()?)
+        };
+
+        let condition = if !self.check(TokenType::Semicolon) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        self.consume(TokenType::Semicolon, "Expect ';' after loop condition.")?;
+
+        let increment = if !self.check(TokenType::RightParen) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        self.consume(TokenType::RightParen, "Expect ')' after for clauses.")?;
+
+        let mut body = self.statement()?;
+
+        if let Some(increment) = increment {
+            body = Stmt::Block {
+                statements: vec![
+                    Box::new(body),
+                    Box::new(Stmt::Expression {
+                        expression: increment,
+                    }),
+                ],
+            };
         }
 
-        self.expression_statement()
+        if let Some(condition) = condition {
+            body = Stmt::WhileStmt {
+                condition,
+                body: Box::new(body),
+            };
+        }
+
+        if let Some(initializer) = initializer {
+            body = Stmt::Block {
+                statements: vec![Box::new(initializer), Box::new(body)],
+            };
+        }
+
+        Ok(body)
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt, std::io::Error> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' after condition.")?;
+        let body = Box::new(self.statement()?);
+
+        Ok(Stmt::WhileStmt { condition, body })
+    }
+
+    fn if_statement(&mut self) -> Result<Stmt, std::io::Error> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'if'.")?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' after if condition.")?;
+
+        let then_branch = Box::new(self.statement()?);
+        let else_branch = if self.match_token(vec![TokenType::Else]) {
+            Some(Box::new(self.statement()?))
+        } else {
+            None
+        };
+
+        Ok(Stmt::IfStmt {
+            condition,
+            then_branch,
+            else_branch,
+        })
+    }
+
+    fn block_statement(&mut self) -> Result<Stmt, std::io::Error> {
+        let mut statements = Vec::new();
+
+        while !self.check(TokenType::RightBrace) && !self.is_at_end() {
+            statements.push(Box::new(self.declaration()?));
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after block.")?;
+
+        Ok(Stmt::Block { statements })
     }
 
     fn print_statement(&mut self) -> Result<Stmt, std::io::Error> {
@@ -97,7 +264,7 @@ impl Parser {
     }
 
     fn assignment(&mut self) -> Result<Expr, std::io::Error> {
-        let expr = self.equality()?;
+        let expr = self.or()?;
 
         if self.match_token(vec![TokenType::Equal]) {
             let value = self.assignment()?;
@@ -129,6 +296,30 @@ impl Parser {
         } else {
             Ok(expr)
         }
+    }
+
+    fn or(&mut self) -> Result<Expr, std::io::Error> {
+        let mut expr = self.and()?;
+
+        while self.match_token(vec![TokenType::Or]) {
+            let operator = self.previous();
+            let right = self.and()?;
+            expr = Expr::new_logical(expr, operator, right);
+        }
+
+        Ok(expr)
+    }
+
+    fn and(&mut self) -> Result<Expr, std::io::Error> {
+        let mut expr = self.equality()?;
+
+        while self.match_token(vec![TokenType::And]) {
+            let operator = self.previous();
+            let right = self.equality()?;
+            expr = Expr::new_logical(expr, operator, right);
+        }
+
+        Ok(expr)
     }
 
     fn equality(&mut self) -> Result<Expr, std::io::Error> {
@@ -230,7 +421,46 @@ impl Parser {
             return Ok(Expr::new_unary(operator, right));
         }
 
-        self.primary()
+        self.call()
+    }
+
+    fn call(&mut self) -> Result<Expr, std::io::Error> {
+        let mut expr = self.primary()?;
+
+        loop {
+            if self.match_token(vec![TokenType::LeftParen]) {
+                expr = self.finish_call(expr)?;
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn finish_call(&mut self, callee: Expr) -> Result<Expr, std::io::Error> {
+        let mut arguments = Vec::new();
+
+        if !self.check(TokenType::RightParen) {
+            loop {
+                if arguments.len() >= 255 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Can't have more than 255 arguments.",
+                    ));
+                }
+
+                arguments.push(self.expression()?);
+
+                if !self.match_token(vec![TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        let paren = self.consume(TokenType::RightParen, "Expect ')' after arguments.")?;
+
+        Ok(Expr::new_call(callee, paren, arguments))
     }
 
     fn primary(&mut self) -> Result<Expr, std::io::Error> {

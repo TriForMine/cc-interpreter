@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::fmt::Display;
 use std::iter::Iterator;
 
 pub struct Scanner<'a> {
@@ -66,14 +66,12 @@ impl<'a> Scanner<'a> {
             ',' => self.add_token(TokenType::Comma),
             '.' => self.add_token(TokenType::Dot),
             '-' => self.add_token(TokenType::Minus),
-            '+' => {
-                match self.peek() {
-                    '=' => {
-                        self.advance();
-                        self.add_token(TokenType::PlusEqual)
-                    }
-                    _ => self.add_token(TokenType::Plus),
+            '+' => match self.peek() {
+                '=' => {
+                    self.advance();
+                    self.add_token(TokenType::PlusEqual)
                 }
+                _ => self.add_token(TokenType::Plus),
             },
             ';' => self.add_token(TokenType::Semicolon),
             '*' => self.add_token(TokenType::Star),
@@ -155,7 +153,9 @@ impl<'a> Scanner<'a> {
             "and" => self.add_token(TokenType::And),
             "class" => self.add_token(TokenType::Class),
             "else" => self.add_token(TokenType::Else),
-            "false" => self.add_token_literal(TokenType::False, Some(Literal::False), "false".to_string()),
+            "false" => {
+                self.add_token_literal(TokenType::False, Some(Literal::False), "false".to_string())
+            }
             "for" => self.add_token(TokenType::For),
             "fun" => self.add_token(TokenType::Fun),
             "if" => self.add_token(TokenType::If),
@@ -165,7 +165,9 @@ impl<'a> Scanner<'a> {
             "return" => self.add_token(TokenType::Return),
             "super" => self.add_token(TokenType::Super),
             "this" => self.add_token(TokenType::This),
-            "true" => self.add_token_literal(TokenType::True, Some(Literal::True), "true".to_string()),
+            "true" => {
+                self.add_token_literal(TokenType::True, Some(Literal::True), "true".to_string())
+            }
             "var" => self.add_token(TokenType::Var),
             "while" => self.add_token(TokenType::While),
             _ => self.add_token(TokenType::Identifier),
@@ -204,7 +206,11 @@ impl<'a> Scanner<'a> {
             )
         } else {
             let int_value = value.parse::<isize>().unwrap();
-            self.add_token_literal(TokenType::Int, Some(Literal::IntValue(int_value)), value.to_string())
+            self.add_token_literal(
+                TokenType::Int,
+                Some(Literal::IntValue(int_value)),
+                value.to_string(),
+            )
         }
     }
 
@@ -226,7 +232,11 @@ impl<'a> Scanner<'a> {
         self.advance();
 
         let value = self.source[self.start + 1..self.current - 1].to_string();
-        self.add_token_literal(TokenType::String, Some(Literal::String(value.clone())), value)
+        self.add_token_literal(
+            TokenType::String,
+            Some(Literal::String(value.clone())),
+            value,
+        )
     }
 
     fn peek_next(&self) -> char {
@@ -259,8 +269,15 @@ impl<'a> Scanner<'a> {
     }
 
     fn advance(&mut self) -> char {
+        if self.is_at_end() {
+            return '\0';
+        }
+
         self.current += 1;
-        self.source.chars().nth(self.current - 1).unwrap()
+        self.source
+            .chars()
+            .nth(self.current - 1)
+            .expect("Unexpected end of file")
     }
 
     fn add_token(&mut self, token_type: TokenType) -> Result<(), std::io::Error> {
@@ -334,9 +351,9 @@ pub enum TokenType {
     Eof,
 }
 
-impl std::fmt::Display for TokenType {
+impl Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -371,13 +388,6 @@ pub struct Token {
     pub line: usize,
 }
 
-impl std::fmt::Display for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let literal = self.literal.as_ref().unwrap_or(&Literal::Nil);
-        write!(f, "{} {} {}", self.token_type, self.lexeme, literal)
-    }
-}
-
 impl Token {
     pub fn new(
         token_type: TokenType,
@@ -400,6 +410,12 @@ impl Token {
             self.lexeme,
             self.literal.as_ref().unwrap_or(&Literal::Nil)
         )
+    }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -463,7 +479,10 @@ mod tests {
         assert_eq!(tokens.len(), 2);
 
         assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].literal, Some(Literal::String("hello world".parse().unwrap())));
+        assert_eq!(
+            tokens[0].literal,
+            Some(Literal::String("hello world".parse().unwrap()))
+        );
         assert_eq!(tokens[1].token_type, TokenType::Eof);
     }
 
@@ -488,7 +507,10 @@ mod tests {
         assert_eq!(tokens.len(), 2);
 
         assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].literal, Some(Literal::String("hello\nworld".parse().unwrap())));
+        assert_eq!(
+            tokens[0].literal,
+            Some(Literal::String("hello\nworld".parse().unwrap()))
+        );
         assert_eq!(tokens[1].token_type, TokenType::Eof);
     }
 

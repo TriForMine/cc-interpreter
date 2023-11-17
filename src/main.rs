@@ -1,9 +1,12 @@
+#![feature(box_patterns)]
+
 mod environment;
 mod expr;
 mod interpreter;
 mod parser;
 mod scanner;
 mod stmt;
+mod tests;
 
 use crate::interpreter::Interpreter;
 use crate::scanner::Scanner;
@@ -18,12 +21,12 @@ fn run(interpreter: &mut Interpreter, source: &str) -> Result<(), std::io::Error
     let mut parser = parser::Parser::new(tokens);
     let stmts = parser.parse()?;
 
-    interpreter.interpret(stmts)?;
+    interpreter.interpret(stmts.iter().collect())?;
 
     Ok(())
 }
 
-fn run_file(path: &str) -> Result<(), std::io::Error> {
+pub fn run_file(path: &str) -> Result<(), std::io::Error> {
     let mut interpreter = Interpreter::new();
     let contents = fs::read_to_string(path)?;
 
