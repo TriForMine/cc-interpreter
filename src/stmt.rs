@@ -1,15 +1,15 @@
 use crate::expr::Expr;
 use crate::scanner::Token;
 
-pub enum Stmt<'a> {
+pub enum Stmt {
     Expression {
-        expression: &'a Expr<'a>,
+        expression: Expr,
     },
     Print {
-        expression: &'a Expr<'a>,
+        expression: Expr,
     },
     Var {
-        name: &'a Token<'a>,
-        initializer: &'a Expr<'a>,
+        name: Token,
+        initializer: Expr,
     },
 }

@@ -3,7 +3,7 @@ use std::iter::Iterator;
 
 pub struct Scanner<'a> {
     source: &'a str,
-    tokens: Vec<Token<'a>>,
+    tokens: Vec<Token>,
     start: usize,
     current: usize,
     line: usize,
@@ -20,7 +20,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub fn scan(&mut self) -> Result<&[Token], std::io::Error> {
+    pub fn scan(&mut self) -> Result<Vec<Token>, std::io::Error> {
         let mut errors = vec![];
 
         while !self.is_at_end() {
@@ -33,7 +33,7 @@ impl<'a> Scanner<'a> {
         }
 
         self.tokens
-            .push(Token::new(TokenType::Eof, "", None, self.line));
+            .push(Token::new(TokenType::Eof, "".to_string(), None, self.line));
 
         if errors.len() > 0 {
             let joined = errors
@@ -48,7 +48,7 @@ impl<'a> Scanner<'a> {
             ));
         }
 
-        Ok(&self.tokens)
+        Ok(self.tokens.clone())
     }
 
     fn is_at_end(&self) -> bool {
@@ -66,11 +66,20 @@ impl<'a> Scanner<'a> {
             ',' => self.add_token(TokenType::Comma),
             '.' => self.add_token(TokenType::Dot),
             '-' => self.add_token(TokenType::Minus),
-            '+' => self.add_token(TokenType::Plus),
+            '+' => {
+                match self.peek() {
+                    '=' => {
+                        self.advance();
+                        self.add_token(TokenType::PlusEqual)
+                    }
+                    _ => self.add_token(TokenType::Plus),
+                }
+            },
             ';' => self.add_token(TokenType::Semicolon),
             '*' => self.add_token(TokenType::Star),
             '!' => {
                 let token_type = if self.match_char('=') {
+                    self.advance();
                     TokenType::BangEqual
                 } else {
                     TokenType::Bang
@@ -80,6 +89,7 @@ impl<'a> Scanner<'a> {
             }
             '=' => {
                 let token_type = if self.match_char('=') {
+                    self.advance();
                     TokenType::EqualEqual
                 } else {
                     TokenType::Equal
@@ -89,6 +99,7 @@ impl<'a> Scanner<'a> {
             }
             '<' => {
                 let token_type = if self.match_char('=') {
+                    self.advance();
                     TokenType::LessEqual
                 } else {
                     TokenType::Less
@@ -98,6 +109,7 @@ impl<'a> Scanner<'a> {
             }
             '>' => {
                 let token_type = if self.match_char('=') {
+                    self.advance();
                     TokenType::GreaterEqual
                 } else {
                     TokenType::Greater
@@ -143,17 +155,17 @@ impl<'a> Scanner<'a> {
             "and" => self.add_token(TokenType::And),
             "class" => self.add_token(TokenType::Class),
             "else" => self.add_token(TokenType::Else),
-            "false" => self.add_token_literal(TokenType::False, Some(Literal::False), "false"),
+            "false" => self.add_token_literal(TokenType::False, Some(Literal::False), "false".to_string()),
             "for" => self.add_token(TokenType::For),
             "fun" => self.add_token(TokenType::Fun),
             "if" => self.add_token(TokenType::If),
-            "nil" => self.add_token_literal(TokenType::Nil, Some(Literal::Nil), "nil"),
+            "nil" => self.add_token_literal(TokenType::Nil, Some(Literal::Nil), "nil".to_string()),
             "or" => self.add_token(TokenType::Or),
             "print" => self.add_token(TokenType::Print),
             "return" => self.add_token(TokenType::Return),
             "super" => self.add_token(TokenType::Super),
             "this" => self.add_token(TokenType::This),
-            "true" => self.add_token_literal(TokenType::True, Some(Literal::True), "true"),
+            "true" => self.add_token_literal(TokenType::True, Some(Literal::True), "true".to_string()),
             "var" => self.add_token(TokenType::Var),
             "while" => self.add_token(TokenType::While),
             _ => self.add_token(TokenType::Identifier),
@@ -188,11 +200,11 @@ impl<'a> Scanner<'a> {
             self.add_token_literal(
                 TokenType::Float,
                 Some(Literal::FloatValue(float_value)),
-                value,
+                value.to_string(),
             )
         } else {
             let int_value = value.parse::<isize>().unwrap();
-            self.add_token_literal(TokenType::Int, Some(Literal::IntValue(int_value)), value)
+            self.add_token_literal(TokenType::Int, Some(Literal::IntValue(int_value)), value.to_string())
         }
     }
 
@@ -213,8 +225,8 @@ impl<'a> Scanner<'a> {
 
         self.advance();
 
-        let value = &self.source[self.start + 1..self.current - 1];
-        self.add_token_literal(TokenType::String, Some(Literal::String(value)), value)
+        let value = self.source[self.start + 1..self.current - 1].to_string();
+        self.add_token_literal(TokenType::String, Some(Literal::String(value.clone())), value)
     }
 
     fn peek_next(&self) -> char {
@@ -252,14 +264,15 @@ impl<'a> Scanner<'a> {
     }
 
     fn add_token(&mut self, token_type: TokenType) -> Result<(), std::io::Error> {
-        self.add_token_literal(token_type, None, &self.source[self.start..self.current])
+        let lexeme = self.source[self.start..self.current].to_string();
+        self.add_token_literal(token_type, None, lexeme)
     }
 
     fn add_token_literal(
         &mut self,
         token_type: TokenType,
-        literal: Option<Literal<'a>>,
-        lexeme: &'a str,
+        literal: Option<Literal>,
+        lexeme: String,
     ) -> Result<(), std::io::Error> {
         self.tokens
             .push(Token::new(token_type, lexeme, literal, self.line));
@@ -291,6 +304,7 @@ pub enum TokenType {
     GreaterEqual,
     Less,
     LessEqual,
+    PlusEqual,
 
     // Literals
     Identifier,
@@ -321,14 +335,14 @@ pub enum TokenType {
 }
 
 impl std::fmt::Display for TokenType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Literal<'a> {
-    String(&'a str),
+pub enum Literal {
+    String(String),
     IntValue(isize),
     FloatValue(f64),
     True,
@@ -336,8 +350,8 @@ pub enum Literal<'a> {
     Nil,
 }
 
-impl std::fmt::Display for Literal<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Literal::String(s) => write!(f, "{}", s),
             Literal::IntValue(i) => write!(f, "{}", i),
@@ -350,27 +364,27 @@ impl std::fmt::Display for Literal<'_> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Token<'a> {
+pub struct Token {
     pub token_type: TokenType,
-    pub lexeme: &'a str,
-    pub literal: Option<Literal<'a>>,
+    pub lexeme: String,
+    pub literal: Option<Literal>,
     pub line: usize,
 }
 
-impl std::fmt::Display for Token<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let literal = self.literal.as_ref().unwrap_or(&Literal::Nil);
         write!(f, "{} {} {}", self.token_type, self.lexeme, literal)
     }
 }
 
-impl<'a> Token<'a> {
+impl Token {
     pub fn new(
         token_type: TokenType,
-        lexeme: &'a str,
-        literal: Option<Literal<'a>>,
+        lexeme: String,
+        literal: Option<Literal>,
         line: usize,
-    ) -> Token<'a> {
+    ) -> Token {
         Token {
             token_type,
             lexeme,
@@ -449,7 +463,7 @@ mod tests {
         assert_eq!(tokens.len(), 2);
 
         assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].literal, Some(Literal::String("hello world")));
+        assert_eq!(tokens[0].literal, Some(Literal::String("hello world".parse().unwrap())));
         assert_eq!(tokens[1].token_type, TokenType::Eof);
     }
 
@@ -474,7 +488,7 @@ mod tests {
         assert_eq!(tokens.len(), 2);
 
         assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].literal, Some(Literal::String("hello\nworld")));
+        assert_eq!(tokens[0].literal, Some(Literal::String("hello\nworld".parse().unwrap())));
         assert_eq!(tokens[1].token_type, TokenType::Eof);
     }
 
@@ -535,5 +549,20 @@ mod tests {
         assert_eq!(tokens[14].token_type, TokenType::Var);
         assert_eq!(tokens[15].token_type, TokenType::While);
         assert_eq!(tokens[16].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn test_self_addition() {
+        let mut scanner = Scanner::new("a += 2");
+        let tokens = scanner.scan().unwrap();
+
+        println!("{:?}", tokens);
+
+        assert_eq!(tokens.len(), 4);
+
+        assert_eq!(tokens[0].token_type, TokenType::Identifier);
+        assert_eq!(tokens[1].token_type, TokenType::PlusEqual);
+        assert_eq!(tokens[2].token_type, TokenType::Int);
+        assert_eq!(tokens[3].token_type, TokenType::Eof);
     }
 }

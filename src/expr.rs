@@ -3,21 +3,21 @@ use crate::scanner::{Token, TokenType};
 use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum LiteralValue<'a> {
+pub enum LiteralValue {
     Integer(i64),
     Float(f64),
-    String(Cow<'a, str>),
+    String(String),
     Boolean(bool),
     Nil,
 }
 
-impl<'a> LiteralValue<'_> {
+impl LiteralValue {
     pub fn to_string(&self) -> String {
         format!("{}", self)
     }
 }
 
-impl std::fmt::Display for LiteralValue<'_> {
+impl std::fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             LiteralValue::Integer(i) => write!(f, "{}", i),
@@ -30,62 +30,62 @@ impl std::fmt::Display for LiteralValue<'_> {
 }
 
 #[derive(PartialEq)]
-pub enum Expr<'a> {
+pub enum Expr {
     Assign {
-        name: &'a Token<'a>,
-        value: &'a Expr<'a>,
+        name: Token,
+        value: Box<Expr>,
     },
 
     Binary {
-        left: &'a Expr<'a>,
-        operator: &'a Token<'a>,
-        right: &'a Expr<'a>,
+        left: Box<Expr>,
+        operator: Token,
+        right: Box<Expr>,
     },
 
     Grouping {
-        expression: &'a Expr<'a>,
+        expression: Box<Expr>,
     },
 
     Literal {
-        value: &'a LiteralValue<'a>,
+        value: LiteralValue,
     },
 
     Unary {
-        operator: &'a Token<'a>,
-        right: &'a Expr<'a>,
+        operator: Token,
+        right: Box<Expr>,
     },
 
     Variable {
-        name: &'a Token<'a>,
+        name: Token,
     },
 }
 
-impl<'a> Expr<'a> {
-    pub fn new_assign(name: &'a Token<'_>, value: &'a Expr<'a>) -> Self {
-        Expr::Assign { name, value }
+impl Expr {
+    pub fn new_assign(name: Token, value: Expr) -> Self {
+        Expr::Assign { name, value: Box::new(value) }
     }
 
-    pub fn new_binary(left: &'a Expr<'a>, operator: &'a Token<'a>, right: &'a Expr<'a>) -> Self {
+    pub fn new_binary(left: Expr, operator: Token, right: Expr) -> Self {
         Expr::Binary {
-            left,
+            left: Box::new(left),
             operator,
-            right,
+            right: Box::new(right),
         }
     }
 
-    pub fn new_grouping(expression: &'a Expr<'a>) -> Self {
-        Expr::Grouping { expression }
+    pub fn new_grouping(expression: Expr) -> Self {
+        Expr::Grouping { expression: Box::new(expression) }
     }
 
-    pub fn new_literal(value: &'a LiteralValue<'a>) -> Self {
+    pub fn new_literal(value: LiteralValue) -> Self {
         Expr::Literal { value }
     }
 
-    pub fn new_unary(operator: &'a Token<'a>, right: &'a Expr<'a>) -> Self {
-        Expr::Unary { operator, right }
+    pub fn new_unary(operator: Token, right: Expr) -> Self {
+        Expr::Unary { operator, right: Box::new(right) }
     }
 
-    pub fn new_variable(name: &'a Token<'a>) -> Self {
+    pub fn new_variable(name: Token) -> Self {
         Expr::Variable { name }
     }
 
@@ -123,10 +123,10 @@ impl<'a> Expr<'a> {
         }
     }
 
-    pub fn evaluate<'b>(
-        &'b self,
-        environement: &'b mut Environment<'b>,
-    ) -> Result<&LiteralValue, std::io::Error> {
+    pub fn evaluate(
+        self,
+        environement: &mut Environment,
+    ) -> Result<LiteralValue, std::io::Error> {
         match self {
             Expr::Assign { name, value } => match environement.get(&name.lexeme) {
                 Some(_) => {
@@ -141,7 +141,7 @@ impl<'a> Expr<'a> {
             },
             Expr::Variable { name } => {
                 if let Some(value) = environement.get(&name.lexeme) {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -161,50 +161,50 @@ impl<'a> Expr<'a> {
 
                 match (&left, &operator.token_type, &right) {
                     (LiteralValue::Integer(l), TokenType::Minus, LiteralValue::Integer(r)) => {
-                        Ok(&LiteralValue::Integer(l - r))
+                        Ok(LiteralValue::Integer(l - r))
                     }
                     (LiteralValue::Integer(l), TokenType::Plus, LiteralValue::Integer(r)) => {
-                        Ok(&LiteralValue::Integer(l + r))
+                        Ok(LiteralValue::Integer(l + r))
                     }
                     (LiteralValue::Integer(l), TokenType::Slash, LiteralValue::Integer(r)) => {
-                        Ok(&LiteralValue::Integer(l / r))
+                        Ok(LiteralValue::Integer(l / r))
                     }
                     (LiteralValue::Integer(l), TokenType::Star, LiteralValue::Integer(r)) => {
-                        Ok(&LiteralValue::Integer(l * r))
+                        Ok(LiteralValue::Integer(l * r))
                     }
                     (LiteralValue::Integer(l), TokenType::Minus, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(*l as f64 - r))
+                        Ok(LiteralValue::Float(*l as f64 - r))
                     }
                     (LiteralValue::Integer(l), TokenType::Plus, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(*l as f64 + r))
+                        Ok(LiteralValue::Float(*l as f64 + r))
                     }
                     (LiteralValue::Integer(l), TokenType::Slash, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(*l as f64 / r))
+                        Ok(LiteralValue::Float(*l as f64 / r))
                     }
                     (LiteralValue::Integer(l), TokenType::Star, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(*l as f64 * r))
+                        Ok(LiteralValue::Float(*l as f64 * r))
                     }
                     (LiteralValue::Float(l), TokenType::Minus, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(l - r))
+                        Ok(LiteralValue::Float(l - r))
                     }
                     (LiteralValue::Float(l), TokenType::Plus, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(l + r))
+                        Ok(LiteralValue::Float(l + r))
                     }
                     (LiteralValue::Float(l), TokenType::Slash, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(l / r))
+                        Ok(LiteralValue::Float(l / r))
                     }
                     (LiteralValue::Float(l), TokenType::Star, LiteralValue::Float(r)) => {
-                        Ok(&LiteralValue::Float(l * r))
+                        Ok(LiteralValue::Float(l * r))
                     }
                     (LiteralValue::String(l), TokenType::Plus, LiteralValue::String(r)) => {
-                        Ok(&LiteralValue::String(Cow::Owned(format!("{}{}", l, r))))
+                        Ok(LiteralValue::String(format!("{}{}", l, r)))
                     }
-                    (x, TokenType::BangEqual, y) => Ok(&LiteralValue::Boolean(x != y)),
-                    (x, TokenType::EqualEqual, y) => Ok(&LiteralValue::Boolean(x == y)),
-                    (x, TokenType::Less, y) => Ok(&LiteralValue::Boolean(x < y)),
-                    (x, TokenType::LessEqual, y) => Ok(&LiteralValue::Boolean(x <= y)),
-                    (x, TokenType::Greater, y) => Ok(&LiteralValue::Boolean(x > y)),
-                    (x, TokenType::GreaterEqual, y) => Ok(&LiteralValue::Boolean(x >= y)),
+                    (x, TokenType::BangEqual, y) => Ok(LiteralValue::Boolean(x != y)),
+                    (x, TokenType::EqualEqual, y) => Ok(LiteralValue::Boolean(x == y)),
+                    (x, TokenType::Less, y) => Ok(LiteralValue::Boolean(x < y)),
+                    (x, TokenType::LessEqual, y) => Ok(LiteralValue::Boolean(x <= y)),
+                    (x, TokenType::Greater, y) => Ok(LiteralValue::Boolean(x > y)),
+                    (x, TokenType::GreaterEqual, y) => Ok(LiteralValue::Boolean(x >= y)),
                     (x, y, z) => Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!(
@@ -219,15 +219,15 @@ impl<'a> Expr<'a> {
 
                 match operator.token_type {
                     TokenType::Minus => match right {
-                        LiteralValue::Integer(r) => Ok(&LiteralValue::Integer(-*r)),
-                        LiteralValue::Float(r) => Ok(&LiteralValue::Float(-*r)),
+                        LiteralValue::Integer(r) => Ok(LiteralValue::Integer(-r)),
+                        LiteralValue::Float(r) => Ok(LiteralValue::Float(-r)),
                         _ => Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             "Invalid operand for unary minus",
                         )),
                     },
                     TokenType::Bang => match right {
-                        LiteralValue::Boolean(r) => Ok(&LiteralValue::Boolean(!*r)),
+                        LiteralValue::Boolean(r) => Ok(LiteralValue::Boolean(!r)),
                         _ => Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             "Invalid operand for unary bang",
@@ -255,14 +255,14 @@ mod tests {
     #[test]
     fn test_expr_to_string() {
         let expr = Expr::new_binary(
-            Box::new(Expr::new_unary(
-                Token::new(TokenType::Minus, "-", None, 1),
-                Box::new(Expr::new_literal(LiteralValue::Integer(123))),
-            )),
-            Token::new(TokenType::Star, "*", None, 1),
-            Box::new(Expr::new_grouping(Box::new(Expr::new_literal(
+            Expr::new_unary(
+                Token::new(TokenType::Minus, "-".to_string(), None, 1),
+                Expr::new_literal(LiteralValue::Integer(123)),
+            ),
+            Token::new(TokenType::Star, "*".to_string(), None, 1),
+            Expr::new_grouping(Expr::new_literal(
                 LiteralValue::Float(45.67),
-            )))),
+            )),
         );
 
         assert_eq!(expr.to_string(), "(* (- 123) (group 45.67))".to_string());
