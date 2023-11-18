@@ -1,10 +1,11 @@
 use crate::environment::Environment;
-use crate::expr::LiteralValue;
+use crate::expr::{Expr, LiteralValue};
 use crate::expr::LiteralValue::Callable;
 use crate::stmt::Stmt;
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::scanner::Token;
+use anyhow::Result;
 
 pub struct Interpreter {
     pub(crate) specials: Rc<RefCell<Environment>>,
@@ -54,7 +55,7 @@ impl Interpreter {
         }
     }
 
-    pub fn interpret(&mut self, stmt: Vec<&Stmt>) -> Result<(), std::io::Error> {
+    pub fn interpret(&mut self, stmt: Vec<&Stmt>) -> Result<()> {
         for stmt in stmt {
             match stmt {
                 Stmt::Expression { expression } => {
@@ -142,7 +143,7 @@ impl Interpreter {
 
                     self.environment.borrow_mut().define(name.lexeme.clone(), function)
                 }
-                Stmt::Return { keyword, value } => {
+                Stmt::Return { keyword: _, value } => {
                     let value = value
                         .as_ref()
                         .map(|x| x.evaluate(self.environment.clone()))
@@ -154,5 +155,9 @@ impl Interpreter {
         };
 
         Ok(())
+    }
+
+    pub fn resolve(&mut self, expr: &Expr, steps: usize) -> Result<()> {
+        todo!()
     }
 }

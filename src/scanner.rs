@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::iter::Iterator;
+use anyhow::{bail, Result};
 
 pub struct Scanner<'a> {
     source: &'a str,
@@ -20,7 +21,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub fn scan(&mut self) -> Result<Vec<Token>, std::io::Error> {
+    pub fn scan(&mut self) -> Result<Vec<Token>> {
         let mut errors = vec![];
 
         while !self.is_at_end() {
@@ -42,10 +43,7 @@ impl<'a> Scanner<'a> {
                 .collect::<Vec<String>>()
                 .join("\n");
 
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{} errors found:\n{}", errors.len(), joined),
-            ));
+            bail!(joined);
         }
 
         Ok(self.tokens.clone())
@@ -55,7 +53,7 @@ impl<'a> Scanner<'a> {
         self.current >= self.source.len()
     }
 
-    fn scan_token(self: &mut Self) -> Result<(), std::io::Error> {
+    fn scan_token(self: &mut Self) -> Result<()> {
         let c = self.advance();
 
         match c {
@@ -133,16 +131,13 @@ impl<'a> Scanner<'a> {
             '"' => self.string(),
             '0'..='9' => self.number(),
             'a'..='z' | 'A'..='Z' | '_' => self.identifier(),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Unexpected character: {} on line {}", c, self.line),
-            )),
+            _ => bail!("Unexpected character {}", c),
         }?;
 
         Ok(())
     }
 
-    fn identifier(&mut self) -> Result<(), std::io::Error> {
+    fn identifier(&mut self) -> Result<()> {
         while self.peek().is_alphanumeric() || self.peek() == '_' {
             self.advance();
         }
@@ -174,7 +169,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn number(&mut self) -> Result<(), std::io::Error> {
+    fn number(&mut self) -> Result<()> {
         // The "1." should be recognized as a float, not an int, if there is a digit or nothing after the decimal point
 
         while self.peek().is_digit(10) {
@@ -214,7 +209,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn string(&mut self) -> Result<(), std::io::Error> {
+    fn string(&mut self) -> Result<()> {
         while self.peek() != '"' && !self.is_at_end() {
             if self.peek() == '\n' {
                 self.line += 1;
@@ -223,10 +218,7 @@ impl<'a> Scanner<'a> {
         }
 
         if self.is_at_end() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Unterminated string on line {}", self.line),
-            ));
+            bail!("Unterminated string");
         }
 
         self.advance();
@@ -280,7 +272,7 @@ impl<'a> Scanner<'a> {
             .expect("Unexpected end of file")
     }
 
-    fn add_token(&mut self, token_type: TokenType) -> Result<(), std::io::Error> {
+    fn add_token(&mut self, token_type: TokenType) -> Result<()> {
         let lexeme = self.source[self.start..self.current].to_string();
         self.add_token_literal(token_type, None, lexeme)
     }
@@ -290,7 +282,7 @@ impl<'a> Scanner<'a> {
         token_type: TokenType,
         literal: Option<Literal>,
         lexeme: String,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<()> {
         self.tokens
             .push(Token::new(token_type, lexeme, literal, self.line));
         Ok(())

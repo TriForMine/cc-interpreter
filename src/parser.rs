@@ -2,6 +2,8 @@ use crate::expr::{Expr, LiteralValue};
 use crate::scanner::{Token, TokenType};
 use crate::stmt::Stmt;
 use std::fmt::Display;
+use anyhow::{anyhow, bail, Result};
+
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
@@ -25,7 +27,7 @@ impl Parser {
         Parser { tokens, current: 0 }
     }
 
-    pub fn parse(&mut self) -> Result<Vec<Stmt>, std::io::Error> {
+    pub fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements = Vec::new();
         let mut errors = Vec::new();
 
@@ -42,18 +44,15 @@ impl Parser {
         if errors.len() == 0 {
             Ok(statements)
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                errors
+            bail!(errors
                     .iter()
                     .map(|e| e.to_string())
                     .collect::<Vec<String>>()
-                    .join("\n"),
-            ))
+                    .join("\n"))
         }
     }
 
-    fn declaration(&mut self) -> Result<Stmt, std::io::Error> {
+    fn declaration(&mut self) -> Result<Stmt> {
         if self.match_token(vec![TokenType::Var]) {
             match self.var_declaration() {
                 Ok(stmt) => Ok(stmt),
@@ -69,7 +68,7 @@ impl Parser {
         }
     }
 
-    fn function(&mut self, kind: FunctionKind) -> Result<Stmt, std::io::Error> {
+    fn function(&mut self, kind: FunctionKind) -> Result<Stmt> {
         let name = self.consume(TokenType::Identifier, &format!("Expect {} name.", kind))?;
         self.consume(
             TokenType::LeftParen,
@@ -80,10 +79,7 @@ impl Parser {
         if !self.check(TokenType::RightParen) {
             loop {
                 if params.len() >= 255 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Can't have more than 255 parameters.",
-                    ));
+                    bail!("Can't have more than 255 parameters.")
                 }
 
                 params.push(self.consume(TokenType::Identifier, "Expect parameter name.")?);
@@ -102,17 +98,14 @@ impl Parser {
         let body = match self.block_statement() {
             Ok(Stmt::Block { statements }) => statements,
             _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Expect function body.",
-                ))
+                bail!("Expect function body.")
             }
         };
 
         Ok(Stmt::Function { name, params, body })
     }
 
-    fn var_declaration(&mut self) -> Result<Stmt, std::io::Error> {
+    fn var_declaration(&mut self) -> Result<Stmt> {
         let name = self.consume(TokenType::Identifier, "Expect variable name.")?;
 
         let initializer = if self.match_token(vec![TokenType::Equal]) {
@@ -132,7 +125,7 @@ impl Parser {
         })
     }
 
-    fn statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn statement(&mut self) -> Result<Stmt> {
         if self.match_token(vec![TokenType::Print]) {
             self.print_statement()
         } else if self.match_token(vec![TokenType::LeftBrace]) {
@@ -150,7 +143,7 @@ impl Parser {
         }
     }
 
-    fn return_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn return_statement(&mut self) -> Result<Stmt> {
         let keyword = self.previous();
         let value = if !self.check(TokenType::Semicolon) {
             self.expression()?
@@ -166,7 +159,7 @@ impl Parser {
         })
     }
 
-    fn for_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn for_statement(&mut self) -> Result<Stmt> {
         self.consume(TokenType::LeftParen, "Expect '(' after 'for'.")?;
 
         let initializer = if self.match_token(vec![TokenType::Semicolon]) {
@@ -222,7 +215,7 @@ impl Parser {
         Ok(body)
     }
 
-    fn while_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn while_statement(&mut self) -> Result<Stmt> {
         self.consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
         let condition = self.expression()?;
         self.consume(TokenType::RightParen, "Expect ')' after condition.")?;
@@ -231,7 +224,7 @@ impl Parser {
         Ok(Stmt::While { condition, body })
     }
 
-    fn if_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn if_statement(&mut self) -> Result<Stmt> {
         self.consume(TokenType::LeftParen, "Expect '(' after 'if'.")?;
         let condition = self.expression()?;
         self.consume(TokenType::RightParen, "Expect ')' after if condition.")?;
@@ -251,7 +244,7 @@ impl Parser {
         })
     }
 
-    fn block_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn block_statement(&mut self) -> Result<Stmt> {
         let mut statements = Vec::new();
 
         while !self.check(TokenType::RightBrace) && !self.is_at_end() {
@@ -263,33 +256,30 @@ impl Parser {
         Ok(Stmt::Block { statements })
     }
 
-    fn print_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn print_statement(&mut self) -> Result<Stmt> {
         let value = self.expression()?;
         self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
         Ok(Stmt::Print { expression: value })
     }
 
-    fn expression_statement(&mut self) -> Result<Stmt, std::io::Error> {
+    fn expression_statement(&mut self) -> Result<Stmt> {
         let value = self.expression()?;
         self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
         Ok(Stmt::Expression { expression: value })
     }
 
-    fn expression(&mut self) -> Result<Expr, std::io::Error> {
+    fn expression(&mut self) -> Result<Expr> {
         self.assignment()
     }
 
-    fn function_expression(&mut self) -> Result<Expr, std::io::Error> {
+    fn function_expression(&mut self) -> Result<Expr> {
         self.consume(TokenType::LeftParen, "Expect '(' after 'fun'.")?;
         let mut params = Vec::new();
 
         if !self.check(TokenType::RightParen) {
             loop {
                 if params.len() >= 255 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Can't have more than 255 parameters.",
-                    ));
+                    bail!("Can't have more than 255 parameters.")
                 }
 
                 params.push(self.consume(TokenType::Identifier, "Expect parameter name.")?);
@@ -309,17 +299,14 @@ impl Parser {
         let body = match self.block_statement() {
             Ok(Stmt::Block { statements }) => statements,
             _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Expect function body.",
-                ))
+                bail!("Expect function body.")
             }
         };
 
         Ok(Expr::new_function(params, body))
     }
 
-    fn assignment(&mut self) -> Result<Expr, std::io::Error> {
+    fn assignment(&mut self) -> Result<Expr> {
         let expr = self.or()?;
 
         if self.match_token(vec![TokenType::Equal]) {
@@ -327,10 +314,7 @@ impl Parser {
 
             match expr {
                 Expr::Variable { name } => Ok(Expr::new_assign(name, value)),
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Invalid assignment target.",
-                )),
+                _ => bail!("Invalid assignment target."),
             }
         } else if self.match_token(vec![TokenType::PlusEqual]) {
             let value = self.assignment()?;
@@ -344,17 +328,14 @@ impl Parser {
                         value,
                     ),
                 )),
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Invalid assignment target.",
-                )),
+                _ => bail!("Invalid assignment target."),
             }
         } else {
             Ok(expr)
         }
     }
 
-    fn or(&mut self) -> Result<Expr, std::io::Error> {
+    fn or(&mut self) -> Result<Expr> {
         let mut expr = self.and()?;
 
         while self.match_token(vec![TokenType::Or]) {
@@ -366,7 +347,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn and(&mut self) -> Result<Expr, std::io::Error> {
+    fn and(&mut self) -> Result<Expr> {
         let mut expr = self.equality()?;
 
         while self.match_token(vec![TokenType::And]) {
@@ -378,7 +359,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn equality(&mut self) -> Result<Expr, std::io::Error> {
+    fn equality(&mut self) -> Result<Expr> {
         let mut expr = self.comparison()?;
 
         while self.match_token(vec![TokenType::BangEqual, TokenType::EqualEqual]) {
@@ -390,7 +371,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn comparison(&mut self) -> Result<Expr, std::io::Error> {
+    fn comparison(&mut self) -> Result<Expr> {
         let mut expr = self.term()?;
 
         while self.match_token(vec![
@@ -446,7 +427,7 @@ impl Parser {
         self.tokens[self.current - 1].clone()
     }
 
-    fn term(&mut self) -> Result<Expr, std::io::Error> {
+    fn term(&mut self) -> Result<Expr> {
         let mut expr = self.factor()?;
 
         while self.match_token(vec![TokenType::Minus, TokenType::Plus]) {
@@ -458,7 +439,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn factor(&mut self) -> Result<Expr, std::io::Error> {
+    fn factor(&mut self) -> Result<Expr> {
         let mut expr = self.unary()?;
 
         while self.match_token(vec![TokenType::Slash, TokenType::Star]) {
@@ -470,7 +451,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn unary(&mut self) -> Result<Expr, std::io::Error> {
+    fn unary(&mut self) -> Result<Expr> {
         if self.match_token(vec![TokenType::Bang, TokenType::Minus]) {
             let operator = self.previous();
             let right = self.unary()?;
@@ -480,7 +461,7 @@ impl Parser {
         self.call()
     }
 
-    fn call(&mut self) -> Result<Expr, std::io::Error> {
+    fn call(&mut self) -> Result<Expr> {
         let mut expr = self.primary()?;
 
         loop {
@@ -494,16 +475,13 @@ impl Parser {
         Ok(expr)
     }
 
-    fn finish_call(&mut self, callee: Expr) -> Result<Expr, std::io::Error> {
+    fn finish_call(&mut self, callee: Expr) -> Result<Expr> {
         let mut arguments = Vec::new();
 
         if !self.check(TokenType::RightParen) {
             loop {
                 if arguments.len() >= 255 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Can't have more than 255 arguments.",
-                    ));
+                    bail!("Can't have more than 255 arguments.")
                 }
 
                 arguments.push(self.expression()?);
@@ -519,7 +497,7 @@ impl Parser {
         Ok(Expr::new_call(callee, paren, arguments))
     }
 
-    fn primary(&mut self) -> Result<Expr, std::io::Error> {
+    fn primary(&mut self) -> Result<Expr> {
         match self.peek().token_type {
             TokenType::False => {
                 self.advance();
@@ -565,20 +543,20 @@ impl Parser {
                 self.advance();
                 self.function_expression()
             }
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Expect expression.",
-            )),
+            _ => {
+                let token = self.peek();
+                Err(anyhow!("Unexpected token: {:?}", token))
+            }
         }
     }
 
-    fn consume(&mut self, token_type: TokenType, message: &str) -> Result<Token, std::io::Error> {
+    fn consume(&mut self, token_type: TokenType, message: &str) -> Result<Token> {
         if self.check(token_type) {
             self.advance();
             return Ok(self.previous());
         }
 
-        Err(std::io::Error::new(std::io::ErrorKind::Other, message))
+        return Err(anyhow!("{}", message));
     }
 
     fn synchronize(&mut self) {

@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use crate::interpreter::Interpreter;
 use crate::stmt::Stmt;
+use anyhow::{bail, Result};
 
 #[derive(Clone)]
 pub enum LiteralValue {
@@ -289,7 +290,7 @@ impl Expr {
     pub fn evaluate(
         &self,
         environement: Rc<RefCell<Environment>>,
-    ) -> Result<LiteralValue, std::io::Error> {
+    ) -> Result<LiteralValue> {
         match self {
             Expr::AnonFunction { parameters, body } => {
                 let arity = parameters.len();
@@ -336,10 +337,7 @@ impl Expr {
                 if assign_success {
                     Ok(new_value)
                 } else {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Undefined variable '{}'.", name.lexeme),
-                    ))
+                    bail!("Undefined variable '{}'.", name.lexeme)
                 }
             }
             Expr::Call {
@@ -352,14 +350,7 @@ impl Expr {
                 match callee {
                     LiteralValue::Callable { arity, .. } => {
                         if arguments.len() != arity {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                format!(
-                                    "Expected {} arguments but got {}.",
-                                    arity,
-                                    arguments.len()
-                                ),
-                            ));
+                            bail!("Expected {} arguments but got {}.", arity, arguments.len());
                         };
 
                         let mut evaluated_arguments = Vec::new();
@@ -374,20 +365,14 @@ impl Expr {
 
                         Ok(fun(&evaluated_arguments))
                     }
-                    _ => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Can only call functions and classes.",
-                    )),
+                    _ => bail!("Can only call functions and classes."),
                 }
             }
             Expr::Variable { name } => {
                 if let Some(value) = environement.borrow().get(&name.lexeme) {
                     Ok(value.clone())
                 } else {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Undefined variable '{}'.", name.lexeme),
-                    ))
+                    bail!("Undefined variable '{}'.", name.lexeme)
                 }
             }
             Expr::Grouping { expression } => expression.evaluate(environement),
@@ -414,10 +399,7 @@ impl Expr {
                             right.evaluate(environement)
                         }
                     }
-                    _ => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Invalid operator",
-                    )),
+                    _ => bail!("Invalid operator"),
                 }
             }
             Expr::Binary {
@@ -474,10 +456,12 @@ impl Expr {
                     (x, TokenType::LessEqual, y) => Ok(LiteralValue::Boolean(x <= y)),
                     (x, TokenType::Greater, y) => Ok(LiteralValue::Boolean(x > y)),
                     (x, TokenType::GreaterEqual, y) => Ok(LiteralValue::Boolean(x >= y)),
-                    (x, y, z) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Invalid operands for binary operator: {} {} {}", x, y, z),
-                    )),
+                    (x, y, z) => bail!(
+                        "Invalid operands for operator '{}': {} and {}",
+                        y,
+                        x.to_string(),
+                        z.to_string()
+                    ),
                 }
             }
             Expr::Unary { operator, right } => {
@@ -487,22 +471,13 @@ impl Expr {
                     TokenType::Minus => match right {
                         LiteralValue::Integer(r) => Ok(LiteralValue::Integer(-r)),
                         LiteralValue::Float(r) => Ok(LiteralValue::Float(-r)),
-                        _ => Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "Invalid operand for unary minus",
-                        )),
+                        _ => bail!("Invalid operand for unary minus"),
                     },
                     TokenType::Bang => match right {
                         LiteralValue::Boolean(r) => Ok(LiteralValue::Boolean(!r)),
-                        _ => Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "Invalid operand for unary bang",
-                        )),
+                        _ => bail!("Invalid operand for unary bang"),
                     },
-                    _ => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Invalid operator",
-                    )),
+                    _ => bail!("Invalid operator"),
                 }
             }
         }
