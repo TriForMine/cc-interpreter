@@ -305,6 +305,7 @@ impl Parser {
             TokenType::LeftBrace,
             "Expect '{' before function body.",
         )?;
+
         let body = match self.block_statement() {
             Ok(Stmt::Block { statements }) => statements,
             _ => {
