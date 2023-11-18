@@ -1,8 +1,9 @@
 use crate::expr::Expr;
 use crate::scanner::Token;
 use std::fmt::Display;
+use std::hash::Hash;
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Stmt {
     Block {
         statements: Vec<Box<Stmt>>,
@@ -119,5 +120,11 @@ impl Stmt {
 impl Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_string())
+    }
+}
+
+impl Hash for Stmt {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.to_string().hash(state);
     }
 }

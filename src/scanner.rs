@@ -1,6 +1,7 @@
-use std::fmt::Display;
-use std::iter::Iterator;
 use anyhow::{bail, Result};
+use std::fmt::Display;
+use std::hash::Hash;
+use std::iter::Iterator;
 
 pub struct Scanner<'a> {
     source: &'a str,
@@ -122,6 +123,29 @@ impl<'a> Scanner<'a> {
                 } else {
                     self.add_token(TokenType::Slash)
                 }
+            }
+            '|' => {
+                let token_type = if self.match_char('|') {
+                    self.advance();
+                    TokenType::Or
+                } else if self.match_char('>') {
+                    self.advance();
+                    TokenType::Pipe
+                } else {
+                    bail!("Unexpected character {}", c)
+                };
+
+                self.add_token(token_type)
+            }
+            '&' => {
+                let token_type = if self.match_char('&') {
+                    self.advance();
+                    TokenType::And
+                } else {
+                    bail!("Unexpected character {}", c)
+                };
+
+                self.add_token(token_type)
             }
             ' ' | '\r' | '\t' => Ok(()),
             '\n' => {
@@ -289,7 +313,7 @@ impl<'a> Scanner<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TokenType {
     // Single-character tokens
     LeftParen,
@@ -314,6 +338,7 @@ pub enum TokenType {
     Less,
     LessEqual,
     PlusEqual,
+    Pipe,
 
     // Literals
     Identifier,
@@ -359,7 +384,7 @@ pub enum Literal {
     Nil,
 }
 
-impl std::fmt::Display for Literal {
+impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Literal::String(s) => write!(f, "{}", s),
@@ -372,7 +397,22 @@ impl std::fmt::Display for Literal {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl Eq for Literal {}
+
+impl Hash for Literal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Literal::String(s) => s.hash(state),
+            Literal::IntValue(i) => i.hash(state),
+            Literal::FloatValue(fl) => fl.to_string().hash(state),
+            Literal::True => "true".hash(state),
+            Literal::False => "false".hash(state),
+            Literal::Nil => "nil".hash(state),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub token_type: TokenType,
     pub lexeme: String,
@@ -408,6 +448,15 @@ impl Token {
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.to_string())
+    }
+}
+
+impl Hash for Token {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.token_type.hash(state);
+        self.lexeme.hash(state);
+        self.literal.hash(state);
+        self.line.hash(state);
     }
 }
 

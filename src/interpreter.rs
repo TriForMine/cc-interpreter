@@ -1,57 +1,47 @@
 use crate::environment::Environment;
-use crate::expr::{Expr, LiteralValue};
+use crate::expr::LiteralValue;
 use crate::expr::LiteralValue::Callable;
-use crate::stmt::Stmt;
-use std::cell::RefCell;
-use std::rc::Rc;
 use crate::scanner::Token;
+use crate::stmt::Stmt;
 use anyhow::Result;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct Interpreter {
-    pub(crate) specials: Rc<RefCell<Environment>>,
-    pub(crate) environment: Rc<RefCell<Environment>>,
-}
-
-fn clock_impl(_args: &Vec<LiteralValue>) -> LiteralValue {
-    LiteralValue::Float(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64(),
-    )
+    pub specials: Rc<RefCell<HashMap<String, LiteralValue>>>,
+    pub environment: Rc<RefCell<Environment>>,
+    pub locals: Rc<RefCell<HashMap<usize, usize>>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let mut globals = Environment::new();
-
-        globals.define(
-            "clock".to_string(),
-            Callable {
-                name: "clock".to_string(),
-                arity: 0,
-                fun: Rc::new(clock_impl),
-            },
-        );
-
         Interpreter {
-            specials: Rc::new(RefCell::new(Environment::new())),
-            //environment: Rc::new(RefCell::new(Environment::new())),
-            environment: Rc::new(RefCell::new(globals)),
+            specials: Rc::new(RefCell::new(HashMap::new())),
+            environment: Rc::new(RefCell::new(Environment::new())),
+            locals: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
-    fn for_closure(parent: Rc<RefCell<Environment>>) -> Self {
+    fn for_closure(
+        parent: Rc<RefCell<Environment>>,
+        locals: Rc<RefCell<HashMap<usize, usize>>>,
+    ) -> Self {
         Interpreter {
-            specials: Rc::new(RefCell::new(Environment::new())),
+            specials: Rc::new(RefCell::new(HashMap::new())),
             environment: Rc::from(RefCell::new(Environment::new_with_enclosing(parent))),
+            locals,
         }
     }
 
-    pub fn for_anonymous(parent: Rc<RefCell<Environment>>) -> Self {
+    pub fn for_anonymous(
+        parent: Rc<RefCell<Environment>>,
+        locals: Rc<RefCell<HashMap<usize, usize>>>,
+    ) -> Self {
         Interpreter {
-            specials: Rc::new(RefCell::new(Environment::new())),
+            specials: Rc::new(RefCell::new(HashMap::new())),
             environment: Rc::new(RefCell::new(Environment::new_with_enclosing(parent))),
+            locals,
         }
     }
 
@@ -59,14 +49,17 @@ impl Interpreter {
         for stmt in stmt {
             match stmt {
                 Stmt::Expression { expression } => {
-                    expression.evaluate(self.environment.clone())?;
+                    expression.evaluate(self.environment.clone(), self.locals.clone())?;
                 }
                 Stmt::Print { expression } => {
-                    let value = expression.evaluate(self.environment.clone())?;
-                    println!("{}", value.to_string());
+                    let value =
+                        expression.evaluate(self.environment.clone(), self.locals.clone())?;
+                    println!("{}", value);
                 }
                 Stmt::Var { name, initializer } => {
-                    let value = initializer.evaluate(self.environment.clone())?;
+                    let value =
+                        initializer.evaluate(self.environment.clone(), self.locals.clone())?;
+
                     self.environment
                         .borrow_mut()
                         .define(name.lexeme.clone(), value);
@@ -88,7 +81,8 @@ impl Interpreter {
                     then_branch,
                     else_branch,
                 } => {
-                    let condition = condition.evaluate(self.environment.clone())?;
+                    let condition =
+                        condition.evaluate(self.environment.clone(), self.locals.clone())?;
 
                     if condition.is_truthy() {
                         self.interpret(vec![then_branch])?;
@@ -97,11 +91,12 @@ impl Interpreter {
                     }
                 }
                 Stmt::While { condition, body } => {
-                    let mut flag = condition.evaluate(self.environment.clone())?;
+                    let mut flag =
+                        condition.evaluate(self.environment.clone(), self.locals.clone())?;
 
                     while flag.is_truthy() {
                         self.interpret(vec![body])?;
-                        flag = condition.evaluate(self.environment.clone())?;
+                        flag = condition.evaluate(self.environment.clone(), self.locals.clone())?;
                     }
                 }
                 Stmt::Function { name, params, body } => {
@@ -111,9 +106,10 @@ impl Interpreter {
                     let body: Vec<Box<Stmt>> = body.iter().map(|x| (*x).clone()).collect();
 
                     let parent_env = self.environment.clone();
-
+                    let parent_locals = self.locals.clone();
                     let fun_impl = move |args: &Vec<LiteralValue>| {
-                        let mut closure_interpreter = Interpreter::for_closure(parent_env.clone());
+                        let mut closure_interpreter =
+                            Interpreter::for_closure(parent_env.clone(), parent_locals.clone());
 
                         for (i, arg) in args.iter().enumerate() {
                             closure_interpreter
@@ -127,7 +123,9 @@ impl Interpreter {
                                 .interpret(vec![&body[i].as_ref()])
                                 .expect("Error in function body");
 
-                            if let Some(return_value) = closure_interpreter.specials.borrow().get("return") {
+                            if let Some(return_value) =
+                                closure_interpreter.specials.borrow().get("return")
+                            {
                                 return return_value.clone();
                             }
                         }
@@ -141,23 +139,28 @@ impl Interpreter {
                         fun: Rc::new(fun_impl),
                     };
 
-                    self.environment.borrow_mut().define(name.lexeme.clone(), function)
+                    self.environment
+                        .borrow_mut()
+                        .define(name.lexeme.clone(), function);
                 }
                 Stmt::Return { keyword: _, value } => {
                     let value = value
                         .as_ref()
-                        .map(|x| x.evaluate(self.environment.clone()))
-                        .unwrap_or(Ok(LiteralValue::Nil))?;
+                        .map(|x| x.evaluate(self.environment.clone(), self.locals.clone()))
+                        .transpose()?;
 
-                    self.specials.borrow_mut().define_top_level("return".to_string(), value);
+                    self.specials
+                        .borrow_mut()
+                        .insert("return".to_string(), value.unwrap_or(LiteralValue::Nil));
                 }
             };
-        };
+        }
 
         Ok(())
     }
 
-    pub fn resolve(&mut self, expr: &Expr, steps: usize) -> Result<()> {
-        todo!()
+    pub fn resolve(&mut self, resolve_id: usize, steps: usize) -> Result<()> {
+        self.locals.borrow_mut().insert(resolve_id, steps);
+        Ok(())
     }
 }

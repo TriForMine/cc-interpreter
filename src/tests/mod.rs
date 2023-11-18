@@ -8,11 +8,13 @@ mod tests {
     #[test]
     fn execute_tests() {
         let cases = read_dir("src/tests/cases").unwrap();
+        let mut count = 0;
 
         let mut errors = vec![];
         for case in cases {
             let case = case.unwrap();
             if case.path().extension().unwrap() == "jlox" {
+                count += 1;
                 match run_test(case) {
                     Ok(_) => {},
                     Err(e) => errors.push(e)
@@ -24,7 +26,7 @@ mod tests {
             for error in &errors {
                 eprintln!("{}", error);
             }
-            panic!("{} tests failed", errors.len());
+            panic!("{} tests failed, and {} tests passed", errors.len(), count - errors.len());
         }
     }
 

@@ -2,45 +2,54 @@ mod environment;
 mod expr;
 mod interpreter;
 mod parser;
+mod resolver;
 mod scanner;
 mod stmt;
 mod tests;
-mod resolver;
 
 use crate::interpreter::Interpreter;
+use crate::resolver::Resolver;
 use crate::scanner::Scanner;
 use anyhow::Result;
+use std::cell::RefCell;
 use std::io::Write;
 use std::process::exit;
+use std::rc::Rc;
 use std::{env, fs};
 
-fn run(interpreter: &mut Interpreter, source: &str) -> Result<()> {
+fn run(interpreter: Rc<RefCell<Interpreter>>, source: &str) -> Result<()> {
     let mut scanner = Scanner::new(source);
     let tokens = scanner.scan()?;
 
     let mut parser = parser::Parser::new(tokens);
     let stmts = parser.parse()?;
 
-    interpreter.interpret(stmts.iter().collect())?;
+    let mut resolver = Resolver::new(interpreter);
+    resolver.resolve_statements(&stmts.iter().collect())?;
+
+    resolver
+        .interpreter
+        .borrow_mut()
+        .interpret(stmts.iter().collect())?;
 
     Ok(())
 }
 
 pub fn run_string(source: &str) -> Result<()> {
-    let mut interpreter = Interpreter::new();
+    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
 
-    run(&mut interpreter, source)
+    run(interpreter, source)
 }
 
 pub fn run_file(path: &str) -> Result<()> {
-    let mut interpreter = Interpreter::new();
+    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
     let contents = fs::read_to_string(path)?;
 
-    run(&mut interpreter, &contents)
+    run(interpreter, &contents)
 }
 
 fn run_prompt() -> Result<()> {
-    let mut interpreter = Interpreter::new();
+    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
 
     loop {
         print!("> ");
@@ -48,7 +57,7 @@ fn run_prompt() -> Result<()> {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
 
-        match run(&mut interpreter, &input) {
+        match run(interpreter.clone(), &input) {
             Ok(_) => (),
             Err(e) => println!("Error: {}", e),
         }

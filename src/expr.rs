@@ -1,11 +1,13 @@
 use crate::environment::Environment;
-use crate::scanner::{Token, TokenType};
-use std::cell::RefCell;
-use std::fmt::Debug;
-use std::rc::Rc;
 use crate::interpreter::Interpreter;
+use crate::scanner::{Token, TokenType};
 use crate::stmt::Stmt;
 use anyhow::{bail, Result};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub enum LiteralValue {
@@ -19,6 +21,39 @@ pub enum LiteralValue {
         arity: usize,
         fun: Rc<dyn Fn(&Vec<LiteralValue>) -> LiteralValue>,
     },
+}
+
+impl Eq for LiteralValue {}
+
+impl Hash for LiteralValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            LiteralValue::Integer(i) => {
+                "int".hash(state);
+                i.hash(state);
+            }
+            LiteralValue::Float(f) => {
+                "float".hash(state);
+                f.to_bits().hash(state);
+            }
+            LiteralValue::String(s) => {
+                "string".hash(state);
+                s.hash(state);
+            }
+            LiteralValue::Boolean(b) => {
+                "bool".hash(state);
+                b.hash(state);
+            }
+            LiteralValue::Nil => {
+                "nil".hash(state);
+            }
+            LiteralValue::Callable { name, arity, .. } => {
+                "callable".hash(state);
+                name.hash(state);
+                arity.hash(state);
+            }
+        }
+    }
 }
 
 impl Debug for LiteralValue {
@@ -102,117 +137,149 @@ impl std::fmt::Display for LiteralValue {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Expr {
     AnonFunction {
+        id: usize,
         parameters: Vec<Token>,
-        body: Vec<Box<Stmt>>
+        body: Vec<Box<Stmt>>,
     },
 
     Assign {
+        id: usize,
         name: Token,
         value: Box<Expr>,
     },
 
     Binary {
+        id: usize,
         left: Box<Expr>,
         operator: Token,
         right: Box<Expr>,
     },
 
     Call {
+        id: usize,
         callee: Box<Expr>,
         paren: Token,
         arguments: Vec<Expr>,
     },
 
     Grouping {
+        id: usize,
         expression: Box<Expr>,
     },
 
     Literal {
+        id: usize,
         value: LiteralValue,
     },
 
     Logical {
+        id: usize,
         left: Box<Expr>,
         operator: Token,
         right: Box<Expr>,
     },
 
     Unary {
+        id: usize,
         operator: Token,
         right: Box<Expr>,
     },
 
     Variable {
+        id: usize,
         name: Token,
     },
 }
 
 impl Expr {
-    pub fn new_assign(name: Token, value: Expr) -> Self {
+    pub fn get_id(&self) -> usize {
+        match self {
+            Expr::AnonFunction { id, .. } => *id,
+            Expr::Assign { id, .. } => *id,
+            Expr::Binary { id, .. } => *id,
+            Expr::Call { id, .. } => *id,
+            Expr::Grouping { id, .. } => *id,
+            Expr::Literal { id, .. } => *id,
+            Expr::Logical { id, .. } => *id,
+            Expr::Unary { id, .. } => *id,
+            Expr::Variable { id, .. } => *id,
+        }
+    }
+
+    pub fn new_assign(id: usize, name: Token, value: Expr) -> Self {
         Expr::Assign {
+            id,
             name,
             value: Box::new(value),
         }
     }
 
-    pub fn new_function(parameters: Vec<Token>, body: Vec<Box<Stmt>>) -> Self {
+    pub fn new_function(id: usize, parameters: Vec<Token>, body: Vec<Box<Stmt>>) -> Self {
         Expr::AnonFunction {
+            id,
             parameters,
             body,
         }
     }
 
-    pub fn new_binary(left: Expr, operator: Token, right: Expr) -> Self {
+    pub fn new_binary(id: usize, left: Expr, operator: Token, right: Expr) -> Self {
         Expr::Binary {
+            id,
             left: Box::new(left),
             operator,
             right: Box::new(right),
         }
     }
 
-    pub fn new_call(callee: Expr, paren: Token, arguments: Vec<Expr>) -> Self {
+    pub fn new_call(id: usize, callee: Expr, paren: Token, arguments: Vec<Expr>) -> Self {
         Expr::Call {
+            id,
             callee: Box::new(callee),
             paren,
             arguments,
         }
     }
 
-    pub fn new_grouping(expression: Expr) -> Self {
+    pub fn new_grouping(id: usize, expression: Expr) -> Self {
         Expr::Grouping {
+            id,
             expression: Box::new(expression),
         }
     }
 
-    pub fn new_literal(value: LiteralValue) -> Self {
-        Expr::Literal { value }
+    pub fn new_literal(id: usize, value: LiteralValue) -> Self {
+        Expr::Literal { id, value }
     }
 
-    pub fn new_logical(left: Expr, operator: Token, right: Expr) -> Self {
+    pub fn new_logical(id: usize, left: Expr, operator: Token, right: Expr) -> Self {
         Expr::Logical {
+            id,
             left: Box::new(left),
             operator,
             right: Box::new(right),
         }
     }
 
-    pub fn new_unary(operator: Token, right: Expr) -> Self {
+    pub fn new_unary(id: usize, operator: Token, right: Expr) -> Self {
         Expr::Unary {
+            id,
             operator,
             right: Box::new(right),
         }
     }
 
-    pub fn new_variable(name: Token) -> Self {
-        Expr::Variable { name }
+    pub fn new_variable(id: usize, name: Token) -> Self {
+        Expr::Variable { id, name }
     }
 
     pub fn to_string(&self) -> String {
         match self {
-            Expr::AnonFunction { parameters, body } => {
+            Expr::AnonFunction {
+                parameters, body, ..
+            } => {
                 let mut s = String::new();
                 s.push_str("(fun (");
                 for param in parameters {
@@ -227,13 +294,14 @@ impl Expr {
                 s.push_str(")");
                 s
             }
-            Expr::Assign { name, value } => {
+            Expr::Assign { name, value, .. } => {
                 format!("(= {} {})", name.lexeme, value.to_string())
             }
             Expr::Binary {
                 left,
                 operator,
                 right,
+                ..
             } => {
                 format!(
                     "({} {} {})",
@@ -246,6 +314,7 @@ impl Expr {
                 callee,
                 paren: _,
                 arguments,
+                ..
             } => {
                 let mut s = String::new();
                 s.push_str(&callee.to_string());
@@ -257,10 +326,10 @@ impl Expr {
                 s.push_str(")");
                 s
             }
-            Expr::Grouping { expression } => {
+            Expr::Grouping { expression, .. } => {
                 format!("(group {})", expression.to_string())
             }
-            Expr::Literal { value } => match value {
+            Expr::Literal { value, .. } => match value {
                 LiteralValue::Integer(i) => format!("{}", i),
                 LiteralValue::Float(f) => format!("{}", f),
                 LiteralValue::String(s) => format!("{}", s),
@@ -272,6 +341,7 @@ impl Expr {
                 left,
                 operator,
                 right,
+                ..
             } => {
                 format!(
                     "({} {} {})",
@@ -280,27 +350,33 @@ impl Expr {
                     right.to_string()
                 )
             }
-            Expr::Unary { operator, right } => {
+            Expr::Unary {
+                operator, right, ..
+            } => {
                 format!("({} {})", operator.lexeme, right.to_string())
             }
-            Expr::Variable { name } => format!("(var {})", name.lexeme),
+            Expr::Variable { name, .. } => format!("(var {})", name.lexeme),
         }
     }
 
     pub fn evaluate(
         &self,
         environement: Rc<RefCell<Environment>>,
+        locals: Rc<RefCell<HashMap<usize, usize>>>,
     ) -> Result<LiteralValue> {
         match self {
-            Expr::AnonFunction { parameters, body } => {
+            Expr::AnonFunction {
+                parameters, body, ..
+            } => {
                 let arity = parameters.len();
                 let env = environement.clone();
+                let locals = locals.clone();
 
                 let parameters: Vec<Token> = parameters.iter().map(|x| (*x).clone()).collect();
                 let body: Vec<Box<Stmt>> = body.iter().map(|x| (*x).clone()).collect();
 
                 let fun_impl = move |args: &Vec<LiteralValue>| {
-                    let mut anon_env = Interpreter::for_anonymous(env.clone());
+                    let mut anon_env = Interpreter::for_anonymous(env.clone(), locals.clone());
 
                     for (i, arg) in args.iter().enumerate() {
                         anon_env
@@ -325,27 +401,32 @@ impl Expr {
                 Ok(LiteralValue::Callable {
                     name: "anon".to_string(),
                     arity,
-                    fun:  Rc::new(fun_impl),
+                    fun: Rc::new(fun_impl),
                 })
             }
-            Expr::Assign { name, value } => {
-                let new_value = value.evaluate(environement.clone())?;
-                let assign_success = environement
-                    .borrow_mut()
-                    .assign(&name.lexeme, new_value.clone());
+            Expr::Assign { name, value, .. } => {
+                let distance = locals.borrow().get(&self.get_id()).cloned();
+
+                let new_value = value.evaluate(environement.clone(), locals.clone())?;
+
+                let assign_success =
+                    environement
+                        .borrow_mut()
+                        .assign(&name.lexeme, new_value.clone(), distance);
 
                 if assign_success {
                     Ok(new_value)
                 } else {
-                    bail!("Undefined variable '{}'.", name.lexeme)
+                    bail!("Line {}: Undefined variable '{}'.", name.line, name.lexeme)
                 }
             }
             Expr::Call {
                 callee,
                 paren: _,
                 arguments,
+                ..
             } => {
-                let callee = callee.evaluate(environement.clone())?;
+                let callee = callee.evaluate(environement.clone(), locals.clone())?;
 
                 match callee {
                     LiteralValue::Callable { arity, .. } => {
@@ -355,7 +436,8 @@ impl Expr {
 
                         let mut evaluated_arguments = Vec::new();
                         for arg in arguments {
-                            evaluated_arguments.push(arg.evaluate(environement.clone())?);
+                            evaluated_arguments
+                                .push(arg.evaluate(environement.clone(), locals.clone())?);
                         }
 
                         let fun = match callee {
@@ -368,35 +450,38 @@ impl Expr {
                     _ => bail!("Can only call functions and classes."),
                 }
             }
-            Expr::Variable { name } => {
-                if let Some(value) = environement.borrow().get(&name.lexeme) {
+            Expr::Variable { name, .. } => {
+                let distance = locals.borrow().get(&self.get_id()).cloned();
+                if let Some(value) = environement.borrow().get(&name.lexeme, distance) {
                     Ok(value.clone())
                 } else {
-                    bail!("Undefined variable '{}'.", name.lexeme)
+                    bail!("Line {}: Undefined variable '{}'.", name.line, name.lexeme)
                 }
             }
-            Expr::Grouping { expression } => expression.evaluate(environement),
-            Expr::Literal { value } => Ok(value.clone()),
+            Expr::Grouping { expression, .. } => expression.evaluate(environement, locals.clone()),
+
+            Expr::Literal { value, .. } => Ok(value.clone()),
             Expr::Logical {
                 left,
                 operator,
                 right,
+                ..
             } => {
-                let left = left.evaluate(environement.clone())?;
+                let left = left.evaluate(environement.clone(), locals.clone())?;
 
                 match operator.token_type {
                     TokenType::Or => {
                         if left.is_truthy() {
                             Ok(left)
                         } else {
-                            right.evaluate(environement.clone())
+                            right.evaluate(environement.clone(), locals.clone())
                         }
                     }
                     TokenType::And => {
                         if left.is_falsey() {
                             Ok(left)
                         } else {
-                            right.evaluate(environement)
+                            right.evaluate(environement, locals.clone())
                         }
                     }
                     _ => bail!("Invalid operator"),
@@ -406,9 +491,10 @@ impl Expr {
                 left,
                 operator,
                 right,
+                ..
             } => {
-                let left = left.evaluate(environement.clone())?;
-                let right = right.evaluate(environement)?;
+                let left = left.evaluate(environement.clone(), locals.clone())?;
+                let right = right.evaluate(environement, locals.clone())?;
 
                 match (&left, &operator.token_type, &right) {
                     (LiteralValue::Integer(l), TokenType::Minus, LiteralValue::Integer(r)) => {
@@ -464,8 +550,10 @@ impl Expr {
                     ),
                 }
             }
-            Expr::Unary { operator, right } => {
-                let right = right.evaluate(environement)?;
+            Expr::Unary {
+                operator, right, ..
+            } => {
+                let right = right.evaluate(environement, locals.clone())?;
 
                 match operator.token_type {
                     TokenType::Minus => match right {
@@ -484,20 +572,98 @@ impl Expr {
     }
 }
 
+impl Hash for Expr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Expr::AnonFunction { id, .. } => {
+                "anon".hash(state);
+                id.hash(state);
+            }
+            Expr::Assign { id, .. } => {
+                "assign".hash(state);
+                id.hash(state);
+            }
+            Expr::Binary { id, .. } => {
+                "binary".hash(state);
+                id.hash(state);
+            }
+            Expr::Call { id, .. } => {
+                "call".hash(state);
+                id.hash(state);
+            }
+            Expr::Grouping { id, .. } => {
+                "grouping".hash(state);
+                id.hash(state);
+            }
+            Expr::Literal { id, .. } => {
+                "literal".hash(state);
+                id.hash(state);
+            }
+            Expr::Logical { id, .. } => {
+                "logical".hash(state);
+                id.hash(state);
+            }
+            Expr::Unary { id, .. } => {
+                "unary".hash(state);
+                id.hash(state);
+            }
+            Expr::Variable { id, .. } => {
+                "variable".hash(state);
+                id.hash(state);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scanner::TokenType;
+    use std::collections::HashMap;
+
+    #[test]
+    fn expr_is_hashable() {
+        // Test 2 times the same expression to make sure that the hash is not based on the pointer
+        let expr = Expr::new_binary(
+            0,
+            Expr::new_unary(
+                1,
+                Token::new(TokenType::Minus, "-".to_string(), None, 1),
+                Expr::new_literal(2, LiteralValue::Integer(123)),
+            ),
+            Token::new(TokenType::Star, "*".to_string(), None, 1),
+            Expr::new_grouping(3, Expr::new_literal(4, LiteralValue::Float(45.67))),
+        );
+
+        let expr2 = Expr::new_binary(
+            0,
+            Expr::new_unary(
+                1,
+                Token::new(TokenType::Minus, "-".to_string(), None, 1),
+                Expr::new_literal(2, LiteralValue::Integer(123)),
+            ),
+            Token::new(TokenType::Star, "*".to_string(), None, 1),
+            Expr::new_grouping(3, Expr::new_literal(4, LiteralValue::Float(45.67))),
+        );
+
+        let mut map = HashMap::new();
+        map.insert(expr, 1);
+        map.insert(expr2, 2);
+
+        assert_eq!(map.len(), 1);
+    }
 
     #[test]
     fn test_expr_to_string() {
         let expr = Expr::new_binary(
+            0,
             Expr::new_unary(
+                1,
                 Token::new(TokenType::Minus, "-".to_string(), None, 1),
-                Expr::new_literal(LiteralValue::Integer(123)),
+                Expr::new_literal(2, LiteralValue::Integer(123)),
             ),
             Token::new(TokenType::Star, "*".to_string(), None, 1),
-            Expr::new_grouping(Expr::new_literal(LiteralValue::Float(45.67))),
+            Expr::new_grouping(3, Expr::new_literal(4, LiteralValue::Float(45.67))),
         );
 
         assert_eq!(expr.to_string(), "(* (- 123) (group 45.67))".to_string());
