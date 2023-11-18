@@ -578,8 +578,6 @@ mod tests {
         let mut scanner = Scanner::new("a += 2");
         let tokens = scanner.scan().unwrap();
 
-        println!("{:?}", tokens);
-
         assert_eq!(tokens.len(), 4);
 
         assert_eq!(tokens[0].token_type, TokenType::Identifier);

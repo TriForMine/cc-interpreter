@@ -9,16 +9,13 @@ pub struct Parser {
 
 enum FunctionKind {
     Function,
-    Method,
-    Initializer,
+    //Method,
 }
 
 impl Display for FunctionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FunctionKind::Function => write!(f, "function"),
-            FunctionKind::Method => write!(f, "method"),
-            FunctionKind::Initializer => write!(f, "initializer"),
+            FunctionKind::Function => write!(f, "function")
         }
     }
 }
@@ -146,9 +143,27 @@ impl Parser {
             self.for_statement()
         } else if self.match_token(vec![TokenType::If]) {
             self.if_statement()
+        } else if self.match_token(vec![TokenType::Return]) {
+            self.return_statement()
         } else {
             self.expression_statement()
         }
+    }
+
+    fn return_statement(&mut self) -> Result<Stmt, std::io::Error> {
+        let keyword = self.previous();
+        let value = if !self.check(TokenType::Semicolon) {
+            self.expression()?
+        } else {
+            Expr::new_literal(LiteralValue::Nil)
+        };
+
+        self.consume(TokenType::Semicolon, "Expect ';' after return value.")?;
+
+        Ok(Stmt::Return {
+            keyword,
+            value: Some(value),
+        })
     }
 
     fn for_statement(&mut self) -> Result<Stmt, std::io::Error> {
@@ -192,7 +207,7 @@ impl Parser {
         }
 
         if let Some(condition) = condition {
-            body = Stmt::WhileStmt {
+            body = Stmt::While {
                 condition,
                 body: Box::new(body),
             };
@@ -213,7 +228,7 @@ impl Parser {
         self.consume(TokenType::RightParen, "Expect ')' after condition.")?;
         let body = Box::new(self.statement()?);
 
-        Ok(Stmt::WhileStmt { condition, body })
+        Ok(Stmt::While { condition, body })
     }
 
     fn if_statement(&mut self) -> Result<Stmt, std::io::Error> {
@@ -222,13 +237,14 @@ impl Parser {
         self.consume(TokenType::RightParen, "Expect ')' after if condition.")?;
 
         let then_branch = Box::new(self.statement()?);
+
         let else_branch = if self.match_token(vec![TokenType::Else]) {
             Some(Box::new(self.statement()?))
         } else {
             None
         };
 
-        Ok(Stmt::IfStmt {
+        Ok(Stmt::If {
             condition,
             then_branch,
             else_branch,
@@ -261,6 +277,45 @@ impl Parser {
 
     fn expression(&mut self) -> Result<Expr, std::io::Error> {
         self.assignment()
+    }
+
+    fn function_expression(&mut self) -> Result<Expr, std::io::Error> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'fun'.")?;
+        let mut params = Vec::new();
+
+        if !self.check(TokenType::RightParen) {
+            loop {
+                if params.len() >= 255 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Can't have more than 255 parameters.",
+                    ));
+                }
+
+                params.push(self.consume(TokenType::Identifier, "Expect parameter name.")?);
+
+                if !self.match_token(vec![TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType::RightParen, "Expect ')' after parameters.")?;
+        self.consume(
+            TokenType::LeftBrace,
+            "Expect '{' before function body.",
+        )?;
+        let body = match self.block_statement() {
+            Ok(Stmt::Block { statements }) => statements,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Expect function body.",
+                ))
+            }
+        };
+
+        Ok(Expr::new_function(params, body))
     }
 
     fn assignment(&mut self) -> Result<Expr, std::io::Error> {
@@ -505,6 +560,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::new_variable(self.previous()))
             }
+            TokenType::Fun => {
+                self.advance();
+                self.function_expression()
+            }
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Expect expression.",
@@ -583,5 +642,27 @@ mod tests {
         let expr = parser.expression().unwrap();
 
         assert_eq!(expr.to_string(), "(> 123 89)");
+    }
+
+    #[test]
+    fn test_if() {
+        let tokens = vec![
+            Token::new(TokenType::If, "if".to_string(), None, 1),
+            Token::new(TokenType::LeftParen, "(".to_string(), None, 1),
+            Token::new(TokenType::True, "true".to_string(), None, 1),
+            Token::new(TokenType::RightParen, ")".to_string(), None, 1),
+            Token::new(TokenType::Print, "print".to_string(), None, 1),
+            Token::new(TokenType::Int, "123".to_string(), None, 1),
+            Token::new(TokenType::Semicolon, ":".to_string(), None, 1),
+            Token::new(TokenType::Eof, "".to_string(), None, 1),
+        ];
+
+        let mut parser = Parser::new(tokens);
+        let stmt = parser.statement().unwrap();
+
+        assert_eq!(
+            stmt.to_string(),
+            "if (true) print 123;"
+        );
     }
 }

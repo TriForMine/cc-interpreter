@@ -4,13 +4,14 @@ use crate::expr::LiteralValue::Callable;
 use crate::stmt::Stmt;
 use std::cell::RefCell;
 use std::rc::Rc;
+use crate::scanner::Token;
 
 pub struct Interpreter {
-    //globals: Environment,
-    environment: Rc<RefCell<Environment>>,
+    pub(crate) specials: Rc<RefCell<Environment>>,
+    pub(crate) environment: Rc<RefCell<Environment>>,
 }
 
-fn clock_impl(_environement: Rc<RefCell<Environment>>, _args: &Vec<LiteralValue>) -> LiteralValue {
+fn clock_impl(_args: &Vec<LiteralValue>) -> LiteralValue {
     LiteralValue::Float(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -33,15 +34,23 @@ impl Interpreter {
         );
 
         Interpreter {
-            //globals,
+            specials: Rc::new(RefCell::new(Environment::new())),
             //environment: Rc::new(RefCell::new(Environment::new())),
             environment: Rc::new(RefCell::new(globals)),
         }
     }
 
-    fn for_closure(parent_env: Rc<RefCell<Environment>>) -> Self {
+    fn for_closure(parent: Rc<RefCell<Environment>>) -> Self {
         Interpreter {
-            environment: parent_env,
+            specials: Rc::new(RefCell::new(Environment::new())),
+            environment: Rc::from(RefCell::new(Environment::new_with_enclosing(parent))),
+        }
+    }
+
+    pub fn for_anonymous(parent: Rc<RefCell<Environment>>) -> Self {
+        Interpreter {
+            specials: Rc::new(RefCell::new(Environment::new())),
+            environment: Rc::new(RefCell::new(Environment::new_with_enclosing(parent))),
         }
     }
 
@@ -73,7 +82,7 @@ impl Interpreter {
 
                     result?;
                 }
-                Stmt::IfStmt {
+                Stmt::If {
                     condition,
                     then_branch,
                     else_branch,
@@ -86,7 +95,7 @@ impl Interpreter {
                         self.interpret(vec![else_branch])?;
                     }
                 }
-                Stmt::WhileStmt { condition, body } => {
+                Stmt::While { condition, body } => {
                     let mut flag = condition.evaluate(self.environment.clone())?;
 
                     while flag.is_truthy() {
@@ -95,52 +104,55 @@ impl Interpreter {
                     }
                 }
                 Stmt::Function { name, params, body } => {
-                    let fun_impl = |parent_env, args: &Vec<LiteralValue>| {
-                        let mut closure_interpreter = Interpreter::for_closure(parent_env);
+                    let arity = params.len();
 
-                        for (param, arg) in params.iter().zip(args.iter()) {
+                    let params: Vec<Token> = params.iter().map(|x| (*x).clone()).collect();
+                    let body: Vec<Box<Stmt>> = body.iter().map(|x| (*x).clone()).collect();
+
+                    let parent_env = self.environment.clone();
+
+                    let fun_impl = move |args: &Vec<LiteralValue>| {
+                        let mut closure_interpreter = Interpreter::for_closure(parent_env.clone());
+
+                        for (i, arg) in args.iter().enumerate() {
                             closure_interpreter
                                 .environment
                                 .borrow_mut()
-                                .define(param.lexeme.clone(), arg.clone());
+                                .define(params[i].lexeme.clone(), (*arg).clone());
                         }
 
-                        for i in 0..body.len() - 1 {
+                        for i in 0..body.len() {
                             closure_interpreter
                                 .interpret(vec![&body[i].as_ref()])
-                                .unwrap();
-                        }
+                                .expect("Error in function body");
 
-                        let value;
-                        match body.last() {
-                            Some(box Stmt::Expression { expression }) => {
-                                value = expression
-                                    .evaluate(closure_interpreter.environment)
-                                    .unwrap();
-                            }
-                            _ => {
-                                value = LiteralValue::Nil;
+                            if let Some(return_value) = closure_interpreter.specials.borrow().get("return") {
+                                return return_value.clone();
                             }
                         }
 
-                        value
+                        LiteralValue::Nil
                     };
 
                     let function = Callable {
                         name: name.lexeme.clone(),
-                        arity: params.len(),
+                        arity,
                         fun: Rc::new(fun_impl),
                     };
 
-                    if !self.environment.borrow_mut().assign(&name.lexeme, function) {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Could not define function {}", name.lexeme),
-                        ));
-                    }
+                    self.environment.borrow_mut().define(name.lexeme.clone(), function)
+                }
+                Stmt::Return { keyword, value } => {
+                    let value = value
+                        .as_ref()
+                        .map(|x| x.evaluate(self.environment.clone()))
+                        .unwrap_or(Ok(LiteralValue::Nil))?;
+
+                    self.specials.borrow_mut().define_top_level("return".to_string(), value);
                 }
             };
-        }
+        };
+
         Ok(())
     }
 }

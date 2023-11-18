@@ -1,0 +1,7 @@
+fun noreturn(a, b) {
+    print a;
+    print b;
+    return;
+}
+
+print noreturn(1, 2);

@@ -2,6 +2,7 @@ use crate::expr::Expr;
 use crate::scanner::Token;
 use std::fmt::Display;
 
+#[derive(PartialEq, Clone, Debug)]
 pub enum Stmt {
     Block {
         statements: Vec<Box<Stmt>>,
@@ -16,12 +17,12 @@ pub enum Stmt {
         name: Token,
         initializer: Expr,
     },
-    IfStmt {
+    If {
         condition: Expr,
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
     },
-    WhileStmt {
+    While {
         condition: Expr,
         body: Box<Stmt>,
     },
@@ -29,6 +30,10 @@ pub enum Stmt {
         name: Token,
         params: Vec<Token>,
         body: Vec<Box<Stmt>>,
+    },
+    Return {
+        keyword: Token,
+        value: Option<Expr>,
     },
 }
 
@@ -43,7 +48,13 @@ impl Stmt {
                 s
             }
             Stmt::Expression { expression } => expression.to_string(),
-            Stmt::Print { expression } => expression.to_string(),
+            Stmt::Print { expression } => {
+                let mut s = String::new();
+                s.push_str("print ");
+                s.push_str(&expression.to_string());
+                s.push_str(";");
+                s
+            }
             Stmt::Var { name, initializer } => {
                 let mut s = String::new();
                 s.push_str(&name.lexeme);
@@ -52,7 +63,7 @@ impl Stmt {
                 s.push_str(";");
                 s
             }
-            Stmt::IfStmt {
+            Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -68,12 +79,37 @@ impl Stmt {
                 }
                 s
             }
-            Stmt::WhileStmt { condition, body } => {
+            Stmt::Return { keyword, value } => {
+                let mut s = String::new();
+                s.push_str(&keyword.lexeme);
+                if let Some(value) = value {
+                    s.push_str(" ");
+                    s.push_str(&value.to_string());
+                }
+                s.push_str(";");
+                s
+            }
+            Stmt::While { condition, body } => {
                 let mut s = String::new();
                 s.push_str("while (");
                 s.push_str(&condition.to_string());
                 s.push_str(") ");
                 s.push_str(&body.to_string());
+                s
+            }
+            Stmt::Function { name, params, body } => {
+                let mut s = String::new();
+                s.push_str("fun ");
+                s.push_str(&name.lexeme);
+                s.push_str("(");
+                for param in params {
+                    s.push_str(&param.lexeme);
+                    s.push_str(", ");
+                }
+                s.push_str(") ");
+                for stmt in body {
+                    s.push_str(&stmt.to_string());
+                }
                 s
             }
         }

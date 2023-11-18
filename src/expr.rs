@@ -1,7 +1,10 @@
 use crate::environment::Environment;
 use crate::scanner::{Token, TokenType};
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::rc::Rc;
+use crate::interpreter::Interpreter;
+use crate::stmt::Stmt;
 
 #[derive(Clone)]
 pub enum LiteralValue {
@@ -13,8 +16,21 @@ pub enum LiteralValue {
     Callable {
         name: String,
         arity: usize,
-        fun: Rc<dyn Fn(Rc<RefCell<Environment>>, &Vec<LiteralValue>) -> LiteralValue>,
+        fun: Rc<dyn Fn(&Vec<LiteralValue>) -> LiteralValue>,
     },
+}
+
+impl Debug for LiteralValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            LiteralValue::Integer(i) => write!(f, "{}", i),
+            LiteralValue::Float(fl) => write!(f, "{}", fl),
+            LiteralValue::String(s) => write!(f, "{}", s),
+            LiteralValue::Boolean(b) => write!(f, "{}", b),
+            LiteralValue::Nil => write!(f, "nil"),
+            LiteralValue::Callable { name, .. } => write!(f, "<fn {}>", name),
+        }
+    }
 }
 
 impl PartialEq for LiteralValue {
@@ -85,8 +101,13 @@ impl std::fmt::Display for LiteralValue {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Expr {
+    AnonFunction {
+        parameters: Vec<Token>,
+        body: Vec<Box<Stmt>>
+    },
+
     Assign {
         name: Token,
         value: Box<Expr>,
@@ -133,6 +154,13 @@ impl Expr {
         Expr::Assign {
             name,
             value: Box::new(value),
+        }
+    }
+
+    pub fn new_function(parameters: Vec<Token>, body: Vec<Box<Stmt>>) -> Self {
+        Expr::AnonFunction {
+            parameters,
+            body,
         }
     }
 
@@ -183,6 +211,21 @@ impl Expr {
 
     pub fn to_string(&self) -> String {
         match self {
+            Expr::AnonFunction { parameters, body } => {
+                let mut s = String::new();
+                s.push_str("(fun (");
+                for param in parameters {
+                    s.push_str(&param.lexeme);
+                    s.push_str(", ");
+                }
+                s.push_str(") ");
+                for stmt in body {
+                    s.push_str(&stmt.to_string());
+                    s.push_str(" ");
+                }
+                s.push_str(")");
+                s
+            }
             Expr::Assign { name, value } => {
                 format!("(= {} {})", name.lexeme, value.to_string())
             }
@@ -200,7 +243,7 @@ impl Expr {
             }
             Expr::Call {
                 callee,
-                paren,
+                paren: _,
                 arguments,
             } => {
                 let mut s = String::new();
@@ -248,6 +291,42 @@ impl Expr {
         environement: Rc<RefCell<Environment>>,
     ) -> Result<LiteralValue, std::io::Error> {
         match self {
+            Expr::AnonFunction { parameters, body } => {
+                let arity = parameters.len();
+                let env = environement.clone();
+
+                let parameters: Vec<Token> = parameters.iter().map(|x| (*x).clone()).collect();
+                let body: Vec<Box<Stmt>> = body.iter().map(|x| (*x).clone()).collect();
+
+                let fun_impl = move |args: &Vec<LiteralValue>| {
+                    let mut anon_env = Interpreter::for_anonymous(env.clone());
+
+                    for (i, arg) in args.iter().enumerate() {
+                        anon_env
+                            .environment
+                            .borrow_mut()
+                            .define(parameters[i].lexeme.clone(), (*arg).clone());
+                    }
+
+                    for i in 0..body.len() {
+                        anon_env
+                            .interpret(vec![&body[i]])
+                            .expect("Error in function body");
+
+                        if let Some(return_value) = anon_env.specials.borrow().get("return") {
+                            return return_value.clone();
+                        }
+                    }
+
+                    LiteralValue::Nil
+                };
+
+                Ok(LiteralValue::Callable {
+                    name: "anon".to_string(),
+                    arity,
+                    fun:  Rc::new(fun_impl),
+                })
+            }
             Expr::Assign { name, value } => {
                 let new_value = value.evaluate(environement.clone())?;
                 let assign_success = environement
@@ -293,7 +372,7 @@ impl Expr {
                             _ => panic!("Expected a function"),
                         };
 
-                        Ok(fun(environement.clone(), &evaluated_arguments))
+                        Ok(fun(&evaluated_arguments))
                     }
                     _ => Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,

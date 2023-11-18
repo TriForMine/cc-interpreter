@@ -1,5 +1,3 @@
-#![feature(box_patterns)]
-
 mod environment;
 mod expr;
 mod interpreter;

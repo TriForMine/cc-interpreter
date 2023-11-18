@@ -27,6 +27,14 @@ impl Environment {
         self.values.insert(name, value);
     }
 
+    pub fn define_top_level(&mut self, name: String, value: LiteralValue) {
+        if let Some(env) = &mut self.enclosing {
+            env.borrow_mut().define_top_level(name, value);
+        } else {
+            self.define(name, value);
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<LiteralValue> {
         let value = self.values.get(name);
 
@@ -46,14 +54,5 @@ impl Environment {
         } else {
             false
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn try_init() {
-        let mut env = Environment::new();
     }
 }
