@@ -1,8 +1,7 @@
 fun make_counter() {
     var i = 0;
     fun count() {
-        i += 1;
-        print i;
+        print i++;
     }
 
     return count;

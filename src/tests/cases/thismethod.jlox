@@ -1,0 +1,10 @@
+class Greeter {
+    fun greet() {
+        print "Hello, " + this.name;
+    }
+}
+
+var g = Greeter();
+g.name = "World";
+
+g.greet();

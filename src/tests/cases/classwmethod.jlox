@@ -1,0 +1,7 @@
+class Greeter {
+    fun hello() {
+        print "Hello";
+    }
+}
+var g = Greeter();
+g.hello();

@@ -1,0 +1,26 @@
+class Animal {
+    var name;
+
+    fun init(name) {
+        this.name = name;
+    }
+
+    fun getName() {
+        return this.name;
+    }
+}
+
+class Cat < Animal {
+    fun init(name) {
+        super.init(name);
+    }
+
+    fun meow() {
+        print "Meow!";
+    }
+}
+
+var cat = Cat("Kitty");
+
+print cat.getName();
+cat.meow();

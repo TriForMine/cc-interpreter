@@ -18,6 +18,12 @@ pub enum Stmt {
         name: Token,
         initializer: Expr,
     },
+    Class {
+        name: Token,
+        methods: Vec<Box<Stmt>>,
+        superclass: Option<Expr>,
+        attributes: Vec<Stmt>,
+    },
     If {
         condition: Expr,
         then_branch: Box<Stmt>,
@@ -31,6 +37,10 @@ pub enum Stmt {
         name: Token,
         params: Vec<Token>,
         body: Vec<Box<Stmt>>,
+    },
+    CmdFunction {
+        name: Token,
+        cmd: String,
     },
     Return {
         keyword: Token,
@@ -62,6 +72,22 @@ impl Stmt {
                 s.push_str(" = ");
                 s.push_str(&initializer.to_string());
                 s.push_str(";");
+                s
+            }
+            Stmt::Class {
+                name,
+                methods,
+                superclass: _,
+                attributes: _,
+            } => {
+                let mut s = String::new();
+                s.push_str("class ");
+                s.push_str(&name.lexeme);
+                s.push_str(" {");
+                for method in methods {
+                    s.push_str(&method.to_string());
+                }
+                s.push_str("}");
                 s
             }
             Stmt::If {
@@ -96,6 +122,14 @@ impl Stmt {
                 s.push_str(&condition.to_string());
                 s.push_str(") ");
                 s.push_str(&body.to_string());
+                s
+            }
+            Stmt::CmdFunction { name, cmd } => {
+                let mut s = String::new();
+                s.push_str("fun ");
+                s.push_str(&name.lexeme);
+                s.push_str("() ");
+                s.push_str(&cmd);
                 s
             }
             Stmt::Function { name, params, body } => {

@@ -1,0 +1,5 @@
+class Bagel {}
+var b = Bagel();
+b.fn = fun (a) { return a + 2; };
+var c = Bagel();
+var result = c.fn(2);

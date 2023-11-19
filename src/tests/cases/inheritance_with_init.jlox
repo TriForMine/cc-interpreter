@@ -1,0 +1,18 @@
+class Animal {
+    fun init() {
+        this.name = "Animal";
+    }
+
+    fun speak() {
+        print this.name;
+    }
+}
+
+class Cat < Animal {
+    fun init() {
+        super.init();
+    }
+}
+
+var cat = Cat();
+cat.speak();

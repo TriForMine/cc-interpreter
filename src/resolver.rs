@@ -1,45 +1,95 @@
 use crate::expr::Expr;
-use crate::interpreter::Interpreter;
 use crate::scanner::Token;
 use crate::stmt::Stmt;
 use anyhow::Result;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 #[derive(Copy, Clone, PartialEq)]
 enum FunctionType {
     None,
     Function,
+    Method,
 }
 
 pub struct Resolver {
-    pub interpreter: Rc<RefCell<Interpreter>>,
     scopes: Vec<HashMap<String, bool>>,
     current_function: FunctionType,
+    locals: HashMap<usize, usize>,
 }
 
 impl Resolver {
-    pub fn new(interpreter: Rc<RefCell<Interpreter>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            interpreter,
             scopes: Vec::new(),
             current_function: FunctionType::None,
+            locals: HashMap::new(),
         }
     }
 
-    pub fn resolve(&mut self, stmt: &Stmt) -> Result<()> {
+    pub fn resolve(&mut self, stmt: &Vec<&Stmt>) -> Result<HashMap<usize, usize>> {
+        self.resolve_statements(stmt)?;
+        Ok(self.locals.clone())
+    }
+
+    pub fn resolve_internal(&mut self, stmt: &Stmt) -> Result<()> {
         match stmt {
             Stmt::Block { statements: _ } => self.resolve_block(stmt)?,
             Stmt::Var {
                 name: _,
                 initializer: _,
             } => self.resolve_var(stmt)?,
+            Stmt::Class {
+                name,
+                methods,
+                superclass,
+                attributes,
+            } => {
+                if let Some(superclass) = superclass {
+                    if let Expr::Variable {
+                        name: super_name, ..
+                    } = superclass
+                    {
+                        if name.lexeme == super_name.lexeme {
+                            anyhow::bail!("A class cannot inherit from itself");
+                        }
+                    }
+
+                    self.resolve_expr(superclass)?;
+                    self.begin_scope();
+                    self.scopes
+                        .last_mut()
+                        .expect("Stack overflow")
+                        .insert("super".to_string(), true);
+                }
+
+                self.declare(name)?;
+                self.define(name)?;
+
+                self.begin_scope();
+                self.scopes
+                    .last_mut()
+                    .expect("Stack overflow")
+                    .insert("this".to_string(), true);
+
+                for method in methods {
+                    let declaration = FunctionType::Method;
+                    self.resolve_function(&method, declaration)?;
+                }
+
+                self.resolve_statements(&attributes.iter().collect())?;
+
+                self.end_scope();
+
+                if superclass.is_some() {
+                    self.end_scope();
+                }
+            }
             Stmt::Function {
                 name: _,
                 params: _,
                 body: _,
-            } => self.resolve_function(stmt)?,
+            } => self.resolve_function(stmt, FunctionType::Function)?,
+            Stmt::CmdFunction { name: _, cmd: _ } => self.resolve_var(stmt)?,
             Stmt::Expression { expression } => self.resolve_expr(expression)?,
             Stmt::If {
                 condition: _,
@@ -58,7 +108,7 @@ impl Resolver {
             }
             Stmt::While { condition, body } => {
                 self.resolve_expr(condition)?;
-                self.resolve(body.as_ref())?;
+                self.resolve_internal(body.as_ref())?;
             }
         }
 
@@ -67,7 +117,7 @@ impl Resolver {
 
     pub(crate) fn resolve_statements(&mut self, statements: &Vec<&Stmt>) -> Result<()> {
         for stmt in statements {
-            self.resolve(stmt)?;
+            self.resolve_internal(stmt)?;
         }
 
         Ok(())
@@ -93,23 +143,27 @@ impl Resolver {
                 self.resolve_expr(initializer)?;
                 self.define(name)?;
             }
+            Stmt::CmdFunction { name, cmd: _ } => {
+                self.declare(name)?;
+                self.define(name)?;
+            }
             _ => panic!("Expected Stmt::Var, got {:?}", stmt),
         }
 
         Ok(())
     }
 
-    fn resolve_function(&mut self, stmt: &Stmt) -> Result<()> {
+    fn resolve_function(&mut self, stmt: &Stmt, function_type: FunctionType) -> Result<()> {
         match stmt {
             Stmt::Function { name, params, body } => {
-                let enclosing_function = self.current_function;
-                self.current_function = FunctionType::Function;
                 self.declare(name)?;
                 self.define(name)?;
 
-                self.resolve_function_helper(params, &body.iter().map(|b| b.as_ref()).collect())?;
-
-                self.current_function = enclosing_function;
+                self.resolve_function_helper(
+                    params,
+                    &body.iter().map(|b| b.as_ref()).collect(),
+                    function_type,
+                )?;
             }
             _ => panic!("Expected Stmt::Function, got {:?}", stmt),
         }
@@ -125,10 +179,10 @@ impl Resolver {
                 else_branch,
             } => {
                 self.resolve_expr(condition)?;
-                self.resolve(then_branch)?;
+                self.resolve_internal(then_branch)?;
 
                 if let Some(else_branch) = else_branch {
-                    self.resolve(else_branch)?;
+                    self.resolve_internal(else_branch)?;
                 }
             }
             _ => panic!("Expected Stmt::If, got {:?}", stmt),
@@ -137,11 +191,21 @@ impl Resolver {
         Ok(())
     }
 
-    fn resolve_function_helper(&mut self, params: &Vec<Token>, body: &Vec<&Stmt>) -> Result<()> {
+    fn resolve_function_helper(
+        &mut self,
+        params: &Vec<Token>,
+        body: &Vec<&Stmt>,
+        function_type: FunctionType,
+    ) -> Result<()> {
+        let enclosing_function = self.current_function;
+        self.current_function = function_type;
+
         self.begin_scope();
         self.resolve_function_params(params)?;
         self.resolve_statements(body)?;
         self.end_scope();
+
+        self.current_function = enclosing_function;
 
         Ok(())
     }
@@ -206,21 +270,49 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Expr::Get { object, .. } => self.resolve_expr(object),
             Expr::Grouping { expression, .. } => self.resolve_expr(expression),
             Expr::Literal { .. } => Ok(()),
             Expr::Logical { left, right, .. } => {
                 self.resolve_expr(left)?;
                 self.resolve_expr(right)
             }
+            Expr::Set { object, value, .. } => {
+                self.resolve_expr(value)?;
+                self.resolve_expr(object)
+            }
+            Expr::This { keyword, .. } => {
+                if self.current_function != FunctionType::Method {
+                    anyhow::bail!("Cannot use 'this' outside of a class");
+                }
+
+                self.resolve_local(keyword, expr.get_id())
+            }
+            Expr::TypeOf { expression, .. } => self.resolve_expr(expression),
+            Expr::Super { keyword, .. } => {
+                if self.current_function != FunctionType::Method {
+                    anyhow::bail!("Cannot use 'super' outside of a class");
+                }
+
+                if self.scopes.len() < 3 || self.scopes[self.scopes.len() - 3].get("super") == None
+                {
+                    anyhow::bail!("Cannot use 'super' in a class with no superclass");
+                }
+
+                self.resolve_local(keyword, expr.get_id())
+            }
             Expr::Unary { right, .. } => self.resolve_expr(right),
             Expr::AnonFunction {
-                parameters, body, ..
+                arguments: parameters,
+                body,
+                ..
             } => {
                 let enclosing_function = self.current_function;
                 self.current_function = FunctionType::Function;
                 self.resolve_function_helper(
                     parameters,
                     &body.iter().map(|b| b.as_ref()).collect(),
+                    FunctionType::Function,
                 )?;
                 self.current_function = enclosing_function;
                 Ok(())
@@ -250,9 +342,7 @@ impl Resolver {
 
         for (i, scope) in self.scopes.iter().enumerate().rev() {
             if scope.contains_key(&name.lexeme) {
-                self.interpreter
-                    .borrow_mut()
-                    .resolve(resolve_id, size - i - 1)?;
+                self.locals.insert(resolve_id, size - 1 - i);
                 return Ok(());
             }
         }

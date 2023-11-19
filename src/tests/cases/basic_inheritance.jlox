@@ -1,0 +1,11 @@
+class Animal {
+    fun speak() {
+        print "Hello";
+    }
+}
+
+class Cat < Animal {}
+
+var cat = Cat();
+print cat;
+cat.speak();

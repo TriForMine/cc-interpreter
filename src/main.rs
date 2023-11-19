@@ -11,45 +11,42 @@ use crate::interpreter::Interpreter;
 use crate::resolver::Resolver;
 use crate::scanner::Scanner;
 use anyhow::Result;
-use std::cell::RefCell;
 use std::io::Write;
 use std::process::exit;
-use std::rc::Rc;
 use std::{env, fs};
 
-fn run(interpreter: Rc<RefCell<Interpreter>>, source: &str) -> Result<()> {
+fn run(interpreter: &mut Interpreter, source: &str) -> Result<()> {
     let mut scanner = Scanner::new(source);
     let tokens = scanner.scan()?;
 
     let mut parser = parser::Parser::new(tokens);
     let stmts = parser.parse()?;
 
-    let mut resolver = Resolver::new(interpreter);
-    resolver.resolve_statements(&stmts.iter().collect())?;
+    let mut resolver = Resolver::new();
+    let locals = resolver.resolve(&stmts.iter().collect())?;
 
-    resolver
-        .interpreter
-        .borrow_mut()
-        .interpret(stmts.iter().collect())?;
+    interpreter.resolve(locals);
+
+    interpreter.interpret(stmts.iter().collect())?;
 
     Ok(())
 }
 
 pub fn run_string(source: &str) -> Result<()> {
-    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
+    let mut interpreter = Interpreter::new();
 
-    run(interpreter, source)
+    run(&mut interpreter, source)
 }
 
 pub fn run_file(path: &str) -> Result<()> {
-    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
+    let mut interpreter = Interpreter::new();
     let contents = fs::read_to_string(path)?;
 
-    run(interpreter, &contents)
+    run(&mut interpreter, &contents)
 }
 
 fn run_prompt() -> Result<()> {
-    let interpreter = Rc::new(RefCell::new(Interpreter::new()));
+    let mut interpreter = Interpreter::new();
 
     loop {
         print!("> ");
@@ -57,7 +54,7 @@ fn run_prompt() -> Result<()> {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
 
-        match run(interpreter.clone(), &input) {
+        match run(&mut interpreter, &input) {
             Ok(_) => (),
             Err(e) => println!("Error: {}", e),
         }

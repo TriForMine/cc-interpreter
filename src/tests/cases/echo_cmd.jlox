@@ -1,0 +1,4 @@
+fun cmd <- "echo on the commandline";
+
+var result = cmd();
+print result;

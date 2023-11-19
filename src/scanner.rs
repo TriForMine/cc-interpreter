@@ -64,11 +64,25 @@ impl<'a> Scanner<'a> {
             '}' => self.add_token(TokenType::RightBrace),
             ',' => self.add_token(TokenType::Comma),
             '.' => self.add_token(TokenType::Dot),
-            '-' => self.add_token(TokenType::Minus),
+            '-' => match self.peek() {
+                '=' => {
+                    self.advance();
+                    self.add_token(TokenType::MinusEqual)
+                }
+                '-' => {
+                    self.advance();
+                    self.add_token(TokenType::MinusMinus)
+                }
+                _ => self.add_token(TokenType::Minus),
+            },
             '+' => match self.peek() {
                 '=' => {
                     self.advance();
                     self.add_token(TokenType::PlusEqual)
+                }
+                '+' => {
+                    self.advance();
+                    self.add_token(TokenType::PlusPlus)
                 }
                 _ => self.add_token(TokenType::Plus),
             },
@@ -98,6 +112,9 @@ impl<'a> Scanner<'a> {
                 let token_type = if self.match_char('=') {
                     self.advance();
                     TokenType::LessEqual
+                } else if self.match_char('-') {
+                    self.advance();
+                    TokenType::Gets
                 } else {
                     TokenType::Less
                 };
@@ -187,6 +204,7 @@ impl<'a> Scanner<'a> {
             "true" => {
                 self.add_token_literal(TokenType::True, Some(Literal::True), "true".to_string())
             }
+            "typeof" => self.add_token(TokenType::TypeOf),
             "var" => self.add_token(TokenType::Var),
             "while" => self.add_token(TokenType::While),
             _ => self.add_token(TokenType::Identifier),
@@ -338,7 +356,11 @@ pub enum TokenType {
     Less,
     LessEqual,
     PlusEqual,
-    Pipe,
+    PlusPlus,
+    MinusEqual,
+    MinusMinus,
+    Pipe, // |>
+    Gets, // <-
 
     // Literals
     Identifier,
@@ -358,6 +380,7 @@ pub enum TokenType {
     Or,
     Print,
     Return,
+    TypeOf,
     Super,
     This,
     True,
@@ -625,5 +648,19 @@ mod tests {
         assert_eq!(tokens[1].token_type, TokenType::PlusEqual);
         assert_eq!(tokens[2].token_type, TokenType::Int);
         assert_eq!(tokens[3].token_type, TokenType::Eof);
+    }
+
+    #[test]
+    fn gets_keyword() {
+        let mut scanner = Scanner::new("fun cmd <- \"echo hello\";");
+        let tokens = scanner.scan().unwrap();
+
+        assert_eq!(tokens.len(), 6);
+        assert_eq!(tokens[0].token_type, TokenType::Fun);
+        assert_eq!(tokens[1].token_type, TokenType::Identifier);
+        assert_eq!(tokens[2].token_type, TokenType::Gets);
+        assert_eq!(tokens[3].token_type, TokenType::String);
+        assert_eq!(tokens[4].token_type, TokenType::Semicolon);
+        assert_eq!(tokens[5].token_type, TokenType::Eof);
     }
 }

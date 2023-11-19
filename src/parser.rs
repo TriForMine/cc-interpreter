@@ -12,13 +12,14 @@ pub struct Parser {
 
 enum FunctionKind {
     Function,
-    //Method,
+    Method,
 }
 
 impl Display for FunctionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FunctionKind::Function => write!(f, "function"),
+            FunctionKind::Method => write!(f, "method"),
         }
     }
 }
@@ -74,13 +75,64 @@ impl Parser {
             }
         } else if self.match_token(vec![TokenType::Fun]) {
             self.function(FunctionKind::Function)
+        } else if self.match_token(vec![TokenType::Class]) {
+            self.class_declaration()
         } else {
             self.statement()
         }
     }
 
+    fn class_declaration(&mut self) -> Result<Stmt> {
+        let name = self.consume(TokenType::Identifier, "Expect class name.")?;
+
+        let superclass = if self.match_token(vec![TokenType::Less]) {
+            self.consume(TokenType::Identifier, "Expect '<' after superclass name.")?;
+            Some(Expr::new_variable(self.get_id(), self.previous()))
+        } else {
+            None
+        };
+
+        self.consume(TokenType::LeftBrace, "Expect '{' before class body.")?;
+
+        let mut methods = Vec::new();
+        let mut attributes = Vec::new();
+
+        while !self.check(TokenType::RightBrace) && !self.is_at_end() {
+            if self.match_token(vec![TokenType::Fun]) {
+                methods.push(Box::new(self.function(FunctionKind::Method)?));
+            } else if self.match_token(vec![TokenType::Var]) {
+                attributes.push(self.var_declaration()?);
+            } else {
+                bail!("Expect method or attribute declaration.")
+            }
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after class body.")?;
+
+        Ok(Stmt::Class {
+            name,
+            methods,
+            superclass,
+            attributes,
+        })
+    }
+
     fn function(&mut self, kind: FunctionKind) -> Result<Stmt> {
         let name = self.consume(TokenType::Identifier, &format!("Expect {} name.", kind))?;
+
+        if self.match_token(vec![TokenType::Gets]) {
+            let cmd_body = self
+                .consume(TokenType::String, "Expect command string.")?
+                .lexeme;
+
+            self.consume(TokenType::Semicolon, "Expect ';' after command string.")?;
+
+            return Ok(Stmt::CmdFunction {
+                name,
+                cmd: cmd_body,
+            });
+        }
+
         self.consume(
             TokenType::LeftParen,
             &format!("Expect '(' after {} name.", kind),
@@ -282,7 +334,7 @@ impl Parser {
     }
 
     fn function_expression(&mut self) -> Result<Expr> {
-        self.consume(TokenType::LeftParen, "Expect '(' after 'fun'.")?;
+        let paren = self.consume(TokenType::LeftParen, "Expect '(' after 'fun'.")?;
         let mut params = Vec::new();
 
         if !self.check(TokenType::RightParen) {
@@ -309,7 +361,7 @@ impl Parser {
             }
         };
 
-        Ok(Expr::new_function(self.get_id(), params, body))
+        Ok(Expr::new_function(self.get_id(), params, body, paren))
     }
 
     fn assignment(&mut self) -> Result<Expr> {
@@ -320,6 +372,9 @@ impl Parser {
 
             match expr {
                 Expr::Variable { name, .. } => Ok(Expr::new_assign(self.get_id(), name, value)),
+                Expr::Get { object, name, .. } => {
+                    Ok(Expr::new_set(self.get_id(), object, name, value))
+                }
                 _ => bail!("Invalid assignment target."),
             }
         } else if self.match_token(vec![TokenType::PlusEqual]) {
@@ -334,6 +389,50 @@ impl Parser {
                         Expr::new_variable(self.get_id(), name),
                         Token::new(TokenType::Plus, "+".to_string(), None, 1),
                         value,
+                    ),
+                )),
+                _ => bail!("Invalid assignment target."),
+            }
+        } else if self.match_token(vec![TokenType::PlusPlus]) {
+            match expr {
+                Expr::Variable { name, .. } => Ok(Expr::new_assign(
+                    self.get_id(),
+                    name.clone(),
+                    Expr::new_binary(
+                        self.get_id(),
+                        Expr::new_variable(self.get_id(), name),
+                        Token::new(TokenType::Plus, "+".to_string(), None, 1),
+                        Expr::new_literal(self.get_id(), LiteralValue::Integer(1)),
+                    ),
+                )),
+                _ => bail!("Invalid assignment target."),
+            }
+        } else if self.match_token(vec![TokenType::MinusEqual]) {
+            let value = self.assignment()?;
+
+            match expr {
+                Expr::Variable { name, .. } => Ok(Expr::new_assign(
+                    self.get_id(),
+                    name.clone(),
+                    Expr::new_binary(
+                        self.get_id(),
+                        Expr::new_variable(self.get_id(), name),
+                        Token::new(TokenType::Minus, "-".to_string(), None, 1),
+                        value,
+                    ),
+                )),
+                _ => bail!("Invalid assignment target."),
+            }
+        } else if self.match_token(vec![TokenType::MinusMinus]) {
+            match expr {
+                Expr::Variable { name, .. } => Ok(Expr::new_assign(
+                    self.get_id(),
+                    name.clone(),
+                    Expr::new_binary(
+                        self.get_id(),
+                        Expr::new_variable(self.get_id(), name),
+                        Token::new(TokenType::Minus, "-".to_string(), None, 1),
+                        Expr::new_literal(self.get_id(), LiteralValue::Integer(1)),
                     ),
                 )),
                 _ => bail!("Invalid assignment target."),
@@ -410,6 +509,10 @@ impl Parser {
     }
 
     fn match_token(&mut self, types: Vec<TokenType>) -> bool {
+        if self.is_at_end() {
+            return false;
+        }
+
         for token_type in types {
             if self.check(token_type) {
                 self.advance();
@@ -488,6 +591,10 @@ impl Parser {
         loop {
             if self.match_token(vec![TokenType::LeftParen]) {
                 expr = self.finish_call(expr)?;
+            } else if self.match_token(vec![TokenType::Dot]) {
+                let name =
+                    self.consume(TokenType::Identifier, "Expect property name after '.'.")?;
+                expr = Expr::new_get(self.get_id(), expr, name);
             } else {
                 break;
             }
@@ -569,13 +676,30 @@ impl Parser {
                 self.advance();
                 Ok(Expr::new_variable(self.get_id(), self.previous()))
             }
+            TokenType::This => {
+                self.advance();
+                Ok(Expr::new_this(self.get_id(), self.previous()))
+            }
+            TokenType::Super => {
+                self.advance();
+                let keyword = self.previous();
+                self.consume(TokenType::Dot, "Expect '.' after 'super'.")?;
+                let method =
+                    self.consume(TokenType::Identifier, "Expect superclass method name.")?;
+                Ok(Expr::new_super(self.get_id(), keyword, method))
+            }
             TokenType::Fun => {
                 self.advance();
                 self.function_expression()
             }
+            TokenType::TypeOf => {
+                self.advance();
+                let expr = self.expression()?;
+                Ok(Expr::new_type_of(self.get_id(), expr))
+            }
             _ => {
                 let token = self.peek();
-                Err(anyhow!("Unexpected token: {:?}", token))
+                bail!("Line {}: Invalid expression: {}", token.line, token.lexeme)
             }
         }
     }

@@ -1,0 +1,8 @@
+class Bagel {
+    fun will_fail() {
+        super.fail();
+    }
+}
+
+var b = Bagel();
+b.will_fail();

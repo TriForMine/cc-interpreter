@@ -9,6 +9,35 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::rc::Rc;
 
+#[derive(Clone, Hash)]
+pub enum CallableImpl {
+    Function(FunctionImpl),
+    NativeFunction(NativeFunctionImpl),
+}
+
+#[derive(Clone, Hash)]
+pub struct FunctionImpl {
+    pub name: String,
+    pub arity: usize,
+    pub parent_env: Environment,
+    pub params: Vec<Token>,
+    pub body: Vec<Box<Stmt>>,
+}
+
+#[derive(Clone)]
+pub struct NativeFunctionImpl {
+    pub name: String,
+    pub arity: usize,
+    pub fun: Rc<dyn Fn(&Vec<LiteralValue>) -> LiteralValue>,
+}
+
+impl Hash for NativeFunctionImpl {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        "native".hash(state);
+        self.name.hash(state);
+    }
+}
+
 #[derive(Clone)]
 pub enum LiteralValue {
     Integer(i64),
@@ -16,10 +45,16 @@ pub enum LiteralValue {
     String(String),
     Boolean(bool),
     Nil,
-    Callable {
+    Callable(CallableImpl),
+    Class {
         name: String,
-        arity: usize,
-        fun: Rc<dyn Fn(&Vec<LiteralValue>) -> LiteralValue>,
+        methods: HashMap<String, FunctionImpl>,
+        superclass: Option<Box<LiteralValue>>,
+        attributes: HashMap<String, LiteralValue>,
+    },
+    Instance {
+        class: Box<LiteralValue>,
+        fields: Rc<RefCell<HashMap<String, LiteralValue>>>,
     },
 }
 
@@ -47,24 +82,46 @@ impl Hash for LiteralValue {
             LiteralValue::Nil => {
                 "nil".hash(state);
             }
-            LiteralValue::Callable { name, arity, .. } => {
-                "callable".hash(state);
+            LiteralValue::Callable(CallableImpl::Function(FunctionImpl { name, .. })) => {
+                "function".hash(state);
                 name.hash(state);
-                arity.hash(state);
             }
-        }
-    }
-}
+            LiteralValue::Callable(CallableImpl::NativeFunction(NativeFunctionImpl {
+                name,
+                ..
+            })) => {
+                "native".hash(state);
+                name.hash(state);
+            }
+            LiteralValue::Class {
+                name,
+                methods,
+                superclass,
+                attributes,
+            } => {
+                "class".hash(state);
+                name.hash(state);
 
-impl Debug for LiteralValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            LiteralValue::Integer(i) => write!(f, "{}", i),
-            LiteralValue::Float(fl) => write!(f, "{}", fl),
-            LiteralValue::String(s) => write!(f, "{}", s),
-            LiteralValue::Boolean(b) => write!(f, "{}", b),
-            LiteralValue::Nil => write!(f, "nil"),
-            LiteralValue::Callable { name, .. } => write!(f, "<fn {}>", name),
+                for (name, method) in methods {
+                    name.hash(state);
+                    method.hash(state);
+                }
+
+                if let Some(superclass) = superclass {
+                    superclass.hash(state);
+                }
+
+                for (name, value) in attributes {
+                    name.hash(state);
+                    value.hash(state);
+                }
+            }
+            LiteralValue::Instance {
+                class: class_name, ..
+            } => {
+                "instance".hash(state);
+                class_name.hash(state);
+            }
         }
     }
 }
@@ -109,7 +166,50 @@ impl LiteralValue {
             LiteralValue::String(s) => format!("\"{}\"", s),
             LiteralValue::Boolean(b) => format!("{}", b),
             LiteralValue::Nil => format!("nil"),
-            LiteralValue::Callable { name, .. } => format!("<fn {}>", name),
+            LiteralValue::Callable(CallableImpl::Function(FunctionImpl { name, .. })) => {
+                format!("<fn {}>", name)
+            }
+            LiteralValue::Callable(CallableImpl::NativeFunction(NativeFunctionImpl {
+                name,
+                ..
+            })) => {
+                format!("<native fn {}>", name)
+            }
+            LiteralValue::Class { name, .. } => format!("<class {}>", name),
+            LiteralValue::Instance { class, fields: _ } => {
+                if let LiteralValue::Class { name, .. } = &**class {
+                    format!("<instance of {}>", name)
+                } else {
+                    panic!("Expected a class")
+                }
+            }
+        }
+    }
+
+    pub fn type_name(&self) -> String {
+        match self {
+            LiteralValue::Integer(_) => "int".to_string(),
+            LiteralValue::Float(_) => "float".to_string(),
+            LiteralValue::String(_) => "string".to_string(),
+            LiteralValue::Boolean(_) => "bool".to_string(),
+            LiteralValue::Nil => "nil".to_string(),
+            LiteralValue::Callable(CallableImpl::Function(FunctionImpl { name, .. })) => {
+                format!("function {}", name)
+            }
+            LiteralValue::Callable(CallableImpl::NativeFunction(NativeFunctionImpl {
+                name,
+                ..
+            })) => {
+                format!("native {}", name)
+            }
+            LiteralValue::Class { name, .. } => format!("class {}", name),
+            LiteralValue::Instance { class, fields: _ } => {
+                if let LiteralValue::Class { name, .. } = &**class {
+                    format!("instance of {}", name)
+                } else {
+                    panic!("Expected a class")
+                }
+            }
         }
     }
 
@@ -123,11 +223,23 @@ impl LiteralValue {
             LiteralValue::Callable { .. } => {
                 panic!("Cannot check if a function is falsey")
             }
+            LiteralValue::Class { .. } => {
+                panic!("Cannot check if a class is falsey")
+            }
+            LiteralValue::Instance { .. } => {
+                panic!("Cannot check if an instance is falsey")
+            }
         }
     }
 
     pub fn is_truthy(&self) -> bool {
         !self.is_falsey()
+    }
+}
+
+impl Debug for LiteralValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -141,7 +253,8 @@ impl std::fmt::Display for LiteralValue {
 pub enum Expr {
     AnonFunction {
         id: usize,
-        parameters: Vec<Token>,
+        arguments: Vec<Token>,
+        paren: Token,
         body: Vec<Box<Stmt>>,
     },
 
@@ -165,6 +278,12 @@ pub enum Expr {
         arguments: Vec<Expr>,
     },
 
+    Get {
+        id: usize,
+        object: Box<Expr>,
+        name: Token,
+    },
+
     Grouping {
         id: usize,
         expression: Box<Expr>,
@@ -180,6 +299,29 @@ pub enum Expr {
         left: Box<Expr>,
         operator: Token,
         right: Box<Expr>,
+    },
+
+    Set {
+        id: usize,
+        object: Box<Expr>,
+        name: Token,
+        value: Box<Expr>,
+    },
+
+    Super {
+        id: usize,
+        keyword: Token,
+        method: Token,
+    },
+
+    This {
+        id: usize,
+        keyword: Token,
+    },
+
+    TypeOf {
+        id: usize,
+        expression: Box<Expr>,
     },
 
     Unary {
@@ -206,6 +348,11 @@ impl Expr {
             Expr::Logical { id, .. } => *id,
             Expr::Unary { id, .. } => *id,
             Expr::Variable { id, .. } => *id,
+            Expr::Get { id, .. } => *id,
+            Expr::Set { id, .. } => *id,
+            Expr::This { id, .. } => *id,
+            Expr::Super { id, .. } => *id,
+            Expr::TypeOf { id, .. } => *id,
         }
     }
 
@@ -217,11 +364,26 @@ impl Expr {
         }
     }
 
-    pub fn new_function(id: usize, parameters: Vec<Token>, body: Vec<Box<Stmt>>) -> Self {
+    pub fn new_set(id: usize, object: Box<Expr>, name: Token, value: Expr) -> Self {
+        Expr::Set {
+            id,
+            object,
+            name,
+            value: Box::new(value),
+        }
+    }
+
+    pub fn new_function(
+        id: usize,
+        parameters: Vec<Token>,
+        body: Vec<Box<Stmt>>,
+        paren: Token,
+    ) -> Self {
         Expr::AnonFunction {
             id,
-            parameters,
+            arguments: parameters,
             body,
+            paren,
         }
     }
 
@@ -243,11 +405,31 @@ impl Expr {
         }
     }
 
+    pub fn new_get(id: usize, object: Expr, name: Token) -> Self {
+        Expr::Get {
+            id,
+            object: Box::new(object),
+            name,
+        }
+    }
+
     pub fn new_grouping(id: usize, expression: Expr) -> Self {
         Expr::Grouping {
             id,
             expression: Box::new(expression),
         }
+    }
+
+    pub fn new_super(id: usize, keyword: Token, method: Token) -> Self {
+        Expr::Super {
+            id,
+            keyword,
+            method,
+        }
+    }
+
+    pub fn new_this(id: usize, keyword: Token) -> Self {
+        Expr::This { id, keyword }
     }
 
     pub fn new_literal(id: usize, value: LiteralValue) -> Self {
@@ -275,10 +457,19 @@ impl Expr {
         Expr::Variable { id, name }
     }
 
+    pub fn new_type_of(id: usize, expression: Expr) -> Self {
+        Expr::TypeOf {
+            id,
+            expression: Box::new(expression),
+        }
+    }
+
     pub fn to_string(&self) -> String {
         match self {
             Expr::AnonFunction {
-                parameters, body, ..
+                arguments: parameters,
+                body,
+                ..
             } => {
                 let mut s = String::new();
                 s.push_str("(fun (");
@@ -326,6 +517,9 @@ impl Expr {
                 s.push_str(")");
                 s
             }
+            Expr::Get { object, name, .. } => {
+                format!("(get {} {})", object.to_string(), name.lexeme)
+            }
             Expr::Grouping { expression, .. } => {
                 format!("(group {})", expression.to_string())
             }
@@ -335,7 +529,21 @@ impl Expr {
                 LiteralValue::String(s) => format!("{}", s),
                 LiteralValue::Boolean(b) => format!("{}", b),
                 LiteralValue::Nil => format!("nil"),
-                LiteralValue::Callable { name, .. } => format!("<fn {}>", name),
+                LiteralValue::Callable(CallableImpl::Function(FunctionImpl { name, .. })) => {
+                    format!("<fn {}>", name)
+                }
+                LiteralValue::Callable(CallableImpl::NativeFunction(NativeFunctionImpl {
+                    name,
+                    ..
+                })) => {
+                    format!("<native fn {}>", name)
+                }
+                LiteralValue::Class { name, .. } => format!("<class {}>", name),
+                LiteralValue::Instance {
+                    class: class_name, ..
+                } => {
+                    format!("<instance of {}>", class_name)
+                }
             },
             Expr::Logical {
                 left,
@@ -350,6 +558,18 @@ impl Expr {
                     right.to_string()
                 )
             }
+            Expr::Set { object, name, .. } => {
+                format!("(set {} {})", object.to_string(), name.lexeme)
+            }
+            Expr::Super {
+                keyword, method, ..
+            } => {
+                format!("(super {} {})", keyword.lexeme, method.lexeme)
+            }
+            Expr::This { keyword, .. } => format!("(this {})", keyword.lexeme),
+            Expr::TypeOf { expression, .. } => {
+                format!("(typeof {})", expression.to_string())
+            }
             Expr::Unary {
                 operator, right, ..
             } => {
@@ -359,60 +579,30 @@ impl Expr {
         }
     }
 
-    pub fn evaluate(
-        &self,
-        environement: Rc<RefCell<Environment>>,
-        locals: Rc<RefCell<HashMap<usize, usize>>>,
-    ) -> Result<LiteralValue> {
+    pub fn evaluate(&self, environment: Environment) -> Result<LiteralValue> {
         match self {
             Expr::AnonFunction {
-                parameters, body, ..
+                arguments, body, ..
             } => {
-                let arity = parameters.len();
-                let env = environement.clone();
-                let locals = locals.clone();
-
-                let parameters: Vec<Token> = parameters.iter().map(|x| (*x).clone()).collect();
+                let arity = arguments.len();
+                let arguments: Vec<Token> = arguments.iter().map(|x| (*x).clone()).collect();
                 let body: Vec<Box<Stmt>> = body.iter().map(|x| (*x).clone()).collect();
 
-                let fun_impl = move |args: &Vec<LiteralValue>| {
-                    let mut anon_env = Interpreter::for_anonymous(env.clone(), locals.clone());
-
-                    for (i, arg) in args.iter().enumerate() {
-                        anon_env
-                            .environment
-                            .borrow_mut()
-                            .define(parameters[i].lexeme.clone(), (*arg).clone());
-                    }
-
-                    for i in 0..body.len() {
-                        anon_env
-                            .interpret(vec![&body[i]])
-                            .expect("Error in function body");
-
-                        if let Some(return_value) = anon_env.specials.borrow().get("return") {
-                            return return_value.clone();
-                        }
-                    }
-
-                    LiteralValue::Nil
-                };
-
-                Ok(LiteralValue::Callable {
-                    name: "anon".to_string(),
-                    arity,
-                    fun: Rc::new(fun_impl),
-                })
+                Ok(LiteralValue::Callable(CallableImpl::Function(
+                    FunctionImpl {
+                        name: "<anon>".to_string(),
+                        arity,
+                        parent_env: environment,
+                        params: arguments,
+                        body,
+                    },
+                )))
             }
             Expr::Assign { name, value, .. } => {
-                let distance = locals.borrow().get(&self.get_id()).cloned();
-
-                let new_value = value.evaluate(environement.clone(), locals.clone())?;
+                let new_value = value.evaluate(environment.clone())?;
 
                 let assign_success =
-                    environement
-                        .borrow_mut()
-                        .assign(&name.lexeme, new_value.clone(), distance);
+                    environment.assign(&name.lexeme, new_value.clone(), self.get_id());
 
                 if assign_success {
                     Ok(new_value)
@@ -426,40 +616,102 @@ impl Expr {
                 arguments,
                 ..
             } => {
-                let callee = callee.evaluate(environement.clone(), locals.clone())?;
+                let callable = callee.evaluate(environment.clone())?;
+                let callable_clone = callable.clone();
 
-                match callee {
-                    LiteralValue::Callable { arity, .. } => {
-                        if arguments.len() != arity {
-                            bail!("Expected {} arguments but got {}.", arity, arguments.len());
-                        };
-
+                match callable {
+                    LiteralValue::Callable(CallableImpl::Function(fun)) => {
+                        run_function(fun, environment, arguments)
+                    }
+                    LiteralValue::Callable(CallableImpl::NativeFunction(NativeFunctionImpl {
+                        fun,
+                        ..
+                    })) => {
                         let mut evaluated_arguments = Vec::new();
                         for arg in arguments {
-                            evaluated_arguments
-                                .push(arg.evaluate(environement.clone(), locals.clone())?);
+                            evaluated_arguments.push(arg.evaluate(environment.clone())?);
                         }
 
-                        let fun = match callee {
-                            LiteralValue::Callable { fun, .. } => fun,
-                            _ => panic!("Expected a function"),
+                        Ok(fun(&evaluated_arguments))
+                    }
+                    LiteralValue::Class {
+                        methods,
+                        attributes,
+                        ..
+                    } => {
+                        let mut fields = HashMap::new();
+
+                        for (name, value) in attributes {
+                            fields.insert(name.clone(), value.clone());
+                        }
+
+                        let instance = LiteralValue::Instance {
+                            class: Box::new(callable_clone.clone()),
+                            fields: Rc::new(RefCell::new(fields)),
                         };
 
-                        Ok(fun(&evaluated_arguments))
+                        if let Some(init_method) = methods.get("init") {
+                            if init_method.arity != arguments.len() {
+                                bail!(
+                                    "Expected {} arguments but got {}.",
+                                    init_method.arity,
+                                    arguments.len()
+                                );
+                            }
+
+                            let mut init_method = init_method.clone();
+                            init_method.parent_env = init_method.parent_env.enclose();
+                            init_method
+                                .parent_env
+                                .define("this".to_string(), instance.clone());
+
+                            run_function(init_method.clone(), environment, arguments)?;
+                        }
+
+                        Ok(instance)
                     }
                     _ => bail!("Can only call functions and classes."),
                 }
             }
             Expr::Variable { name, .. } => {
-                let distance = locals.borrow().get(&self.get_id()).cloned();
-                if let Some(value) = environement.borrow().get(&name.lexeme, distance) {
+                if let Some(value) = environment.get(&name.lexeme, self.get_id()) {
                     Ok(value.clone())
                 } else {
-                    bail!("Line {}: Undefined variable '{}'.", name.line, name.lexeme)
+                    bail!(
+                        "Line {}: Variable '{}' is not defined.",
+                        name.line,
+                        name.lexeme
+                    )
                 }
             }
-            Expr::Grouping { expression, .. } => expression.evaluate(environement, locals.clone()),
+            Expr::Get { object, name, .. } => {
+                let object = object.evaluate(environment.clone())?;
 
+                match object.clone() {
+                    LiteralValue::Instance { class, fields } => {
+                        if let LiteralValue::Class { .. } = &*class {
+                            if let Some(value) = fields.borrow().get(&name.lexeme) {
+                                Ok(value.clone())
+                            } else if let Some(method) = find_method(&name.lexeme, *class.clone()) {
+                                let mut callable_impl = method.clone();
+                                let new_env = callable_impl.parent_env.enclose();
+                                new_env.define("this".to_string(), object.clone());
+                                callable_impl.parent_env = new_env;
+
+                                Ok(LiteralValue::Callable(CallableImpl::Function(
+                                    callable_impl,
+                                )))
+                            } else {
+                                bail!("Line {}: Undefined property '{}'.", name.line, name.lexeme)
+                            }
+                        } else {
+                            panic!("Expected a class")
+                        }
+                    }
+                    _ => bail!("Only instances have properties."),
+                }
+            }
+            Expr::Grouping { expression, .. } => expression.evaluate(environment),
             Expr::Literal { value, .. } => Ok(value.clone()),
             Expr::Logical {
                 left,
@@ -467,25 +719,97 @@ impl Expr {
                 right,
                 ..
             } => {
-                let left = left.evaluate(environement.clone(), locals.clone())?;
+                let left = left.evaluate(environment.clone())?;
 
                 match operator.token_type {
                     TokenType::Or => {
                         if left.is_truthy() {
                             Ok(left)
                         } else {
-                            right.evaluate(environement.clone(), locals.clone())
+                            right.evaluate(environment.clone())
                         }
                     }
                     TokenType::And => {
                         if left.is_falsey() {
                             Ok(left)
                         } else {
-                            right.evaluate(environement, locals.clone())
+                            right.evaluate(environment)
                         }
                     }
                     _ => bail!("Invalid operator"),
                 }
+            }
+            Expr::Set {
+                object,
+                name,
+                value,
+                ..
+            } => {
+                let object = object.evaluate(environment.clone())?;
+
+                match object {
+                    LiteralValue::Instance { class, fields } => {
+                        if let LiteralValue::Class { .. } = &*class {
+                            let new_value = value.evaluate(environment.clone())?;
+                            fields
+                                .borrow_mut()
+                                .insert(name.lexeme.clone(), new_value.clone());
+                            Ok(new_value)
+                        } else {
+                            panic!("Expected a class")
+                        }
+                    }
+                    _ => bail!("Only instances have fields."),
+                }
+            }
+            Expr::Super { method, id, .. } => {
+                let superclass = environment.get("super", self.get_id()).expect(&format!(
+                    "Could not find superclass in environment:\n{}",
+                    environment.dump(0)
+                ));
+                let instance = environment
+                    .get_this_instance(self.get_id())
+                    .expect(&format!(
+                        "Tried to get this from non-existent environment at expression {}",
+                        id
+                    ));
+
+                if let LiteralValue::Class { methods, .. } = superclass {
+                    if let Some(method) = methods.get(&method.lexeme) {
+                        let mut callable_impl = method.clone();
+                        callable_impl.parent_env = callable_impl.parent_env.enclose();
+                        callable_impl
+                            .parent_env
+                            .define("this".to_string(), instance.clone());
+
+                        Ok(LiteralValue::Callable(CallableImpl::Function(
+                            callable_impl,
+                        )))
+                    } else {
+                        bail!(
+                            "Line {}: Undefined property '{}'.",
+                            method.line,
+                            method.lexeme
+                        )
+                    }
+                } else {
+                    panic!("Expected a class")
+                }
+            }
+            Expr::This { keyword, .. } => {
+                if let Some(value) = environment.get(&keyword.lexeme, self.get_id()) {
+                    Ok(value.clone())
+                } else {
+                    bail!(
+                        "Line {}: Undefined variable '{}'.",
+                        keyword.line,
+                        keyword.lexeme
+                    )
+                }
+            }
+            Expr::TypeOf { expression, .. } => {
+                let value = expression.evaluate(environment.clone())?;
+                Ok(LiteralValue::String(value.type_name()))
             }
             Expr::Binary {
                 left,
@@ -493,8 +817,8 @@ impl Expr {
                 right,
                 ..
             } => {
-                let left = left.evaluate(environement.clone(), locals.clone())?;
-                let right = right.evaluate(environement, locals.clone())?;
+                let left = left.evaluate(environment.clone())?;
+                let right = right.evaluate(environment)?;
 
                 match (&left, &operator.token_type, &right) {
                     (LiteralValue::Integer(l), TokenType::Minus, LiteralValue::Integer(r)) => {
@@ -553,7 +877,7 @@ impl Expr {
             Expr::Unary {
                 operator, right, ..
             } => {
-                let right = right.evaluate(environement, locals.clone())?;
+                let right = right.evaluate(environment)?;
 
                 match operator.token_type {
                     TokenType::Minus => match right {
@@ -570,6 +894,69 @@ impl Expr {
             }
         }
     }
+}
+
+fn find_method(name: &String, class: LiteralValue) -> Option<FunctionImpl> {
+    if let LiteralValue::Class {
+        name: _,
+        methods,
+        superclass,
+        attributes: _,
+    } = class
+    {
+        if let Some(method) = methods.get(name) {
+            Some(method.clone())
+        } else if let Some(superclass) = superclass {
+            find_method(name, *superclass)
+        } else {
+            None
+        }
+    } else {
+        panic!("Expected a class")
+    }
+}
+
+pub fn run_function(
+    fun: FunctionImpl,
+    environment: Environment,
+    arguments: &Vec<Expr>,
+) -> Result<LiteralValue> {
+    let FunctionImpl {
+        name: _,
+        arity,
+        parent_env,
+        params,
+        body,
+    } = fun;
+
+    if arguments.len() != arity {
+        bail!("Expected {} arguments but got {}.", arity, arguments.len());
+    };
+
+    let mut evaluated_arguments = Vec::new();
+    for arg in arguments {
+        evaluated_arguments.push(arg.evaluate(environment.clone())?);
+    }
+
+    let fun_env = parent_env.enclose();
+
+    for (i, param) in params.iter().enumerate() {
+        fun_env.define(param.lexeme.clone(), evaluated_arguments[i].clone());
+    }
+
+    let mut int = Interpreter::with_environment(fun_env);
+    for i in 0..body.len() {
+        int.interpret(vec![&body[i]]).expect(&format!(
+            "Evaluation failed inside anon function at statement {}",
+            i
+        ));
+
+        if let Some(return_value) = int.specials.get("return") {
+            return Ok(return_value.clone());
+        }
+    }
+
+    Ok(LiteralValue::Nil)
 }
 
 impl Hash for Expr {
@@ -591,6 +978,10 @@ impl Hash for Expr {
                 "call".hash(state);
                 id.hash(state);
             }
+            Expr::Get { id, .. } => {
+                "get".hash(state);
+                id.hash(state);
+            }
             Expr::Grouping { id, .. } => {
                 "grouping".hash(state);
                 id.hash(state);
@@ -601,6 +992,22 @@ impl Hash for Expr {
             }
             Expr::Logical { id, .. } => {
                 "logical".hash(state);
+                id.hash(state);
+            }
+            Expr::Set { id, .. } => {
+                "set".hash(state);
+                id.hash(state);
+            }
+            Expr::Super { id, .. } => {
+                "super".hash(state);
+                id.hash(state);
+            }
+            Expr::This { id, .. } => {
+                "this".hash(state);
+                id.hash(state);
+            }
+            Expr::TypeOf { id, .. } => {
+                "typeof".hash(state);
                 id.hash(state);
             }
             Expr::Unary { id, .. } => {
